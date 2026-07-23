@@ -78,13 +78,16 @@ def get_uk_1y_gilt_yield():
  
     raise ValueError("No populated 1-year yield found in the sheet")
 
-def get_all_summaries(tickers: list[str]) -> pd.DataFrame:
-    # one HTTP-batched call instead of N separate ones
-    # group_by="ticker" gives a column MultiIndex: (ticker, field)
+def get_market_data(tickers: list[str], years: int = 3):
+    # returns a prices dataframe and log returns dataframe for the given tickers
+    # over the last 'years' years.
+    end_date = pd.Timestamp.today().normalize()
+    start_date = end_date - pd.DateOffset(years=years)
+
     data = yf.download(
         tickers,
-        start="2022-01-01",
-        end="2025-01-01",
+        start=start_date.strftime("%Y-%m-%d"),
+        end=(end_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
         interval="1d",
         group_by="ticker",
         auto_adjust=True,
@@ -92,30 +95,198 @@ def get_all_summaries(tickers: list[str]) -> pd.DataFrame:
         progress=False,
     )
 
-    rows = []
-    for tickerName in tickers:
-        close = data[tickerName]["Close"].dropna()
+    prices = {}
 
-        log_returns = np.log(close / close.shift(1)).dropna()
-        if log_returns.empty:
+    for ticker in tickers:
+        try:
+            close = data[ticker]["Close"]
+        except KeyError:
             continue
 
-        mean_log_return = log_returns.mean()
+        close = close.dropna()
 
-        rows.append({
-            "Ticker": tickerName,
-            "Mean Log Return": mean_log_return,
-            "Geometric Mean Log Return": math.exp(mean_log_return) - 1,
-            "Log Return Variance": log_returns.var(ddof=1),
-            "Expected Return": 0,
-        })
+        if len(close) < 2:
+            continue
 
-    return pd.DataFrame(rows)
+        prices[ticker] = close
+
+    prices_df = pd.DataFrame(prices).sort_index()
+
+    # gets log returns
+    log_returns = np.log(prices_df / prices_df.shift(1)).dropna(how="all")
+
+    # removes stocks which have no usable return data.
+    log_returns = log_returns.dropna(axis=1, how="all")
+
+    log_returns = log_returns.dropna(axis=0, how="any")
+
+    return prices_df, log_returns
+
+def calculate_expected_returns(log_returns: pd.DataFrame,
+                               trading_days: int = 252) -> pd.Series:
+    mean_daily_log_return = log_returns.mean()
+
+    annualised_return = (
+        np.exp(mean_daily_log_return * trading_days) - 1
+    )
+
+    return annualised_return
+
+def calculate_covariance_matrix(log_returns: pd.DataFrame,
+                                trading_days: int = 252) -> pd.DataFrame:
+    daily_covariance = log_returns.cov()
+
+    annualised_covariance = daily_covariance * trading_days
+
+    return annualised_covariance
+
+def save_assets(
+    tickers_df: pd.DataFrame,
+    expected_returns: pd.Series,
+    output_path: str
+):
+    assets = tickers_df[
+        ["company", "yfinance_ticker"]
+    ].copy()
+
+    assets = assets.rename(
+        columns={
+            "company": "Company",
+            "yfinance_ticker": "Ticker"
+        }
+    )
+
+    assets["ExpectedReturn"] = (
+        assets["Ticker"]
+        .map(expected_returns)
+    )
+
+    assets = assets.dropna(subset=["ExpectedReturn"])
+
+    assets.to_csv(
+        output_path,
+        index=False
+    )
+
+def save_covariance(
+    covariance: pd.DataFrame,
+    output_path: str
+):
+    covariance.to_csv(
+        output_path,
+        index_label="Ticker"
+    )
+
+def save_metadata(
+    risk_free_rate: float,
+    start_date,
+    end_date,
+    years: int,
+    output_path: str,
+    trading_days: int = 252
+):
+    metadata = pd.DataFrame({
+        "Parameter": [
+            "RiskFreeRate",
+            "StartDate",
+            "EndDate",
+            "Years",
+            "TradingDaysPerYear",
+        ],
+        "Value": [
+            risk_free_rate,
+            start_date,
+            end_date,
+            years,
+            trading_days,
+        ]
+    })
+
+    metadata.to_csv(
+        output_path,
+        index=False
+    )
 
 if __name__ == "__main__":
-    ftsedf = get_ftse100_tickers()
-    date, yield_pct = get_uk_1y_gilt_yield()
-    print(f"UK 1-year gilt yield ({date}): {yield_pct:.4f}%")
+    YEARS = 5
+    TRADING_DAYS = 252
+    OUTPUT_DIR = "portfolio_data"
 
-    summary_df = get_all_summaries(ftsedf["yfinance_ticker"].tolist())
-    print(summary_df)
+    import os
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # FTSE 100 constituents
+    ftse_df = get_ftse100_tickers()
+
+    tickers = ftse_df["yfinance_ticker"].tolist()
+
+    # Risk-free rate
+    gilt_date, yield_pct = get_uk_1y_gilt_yield()
+    risk_free_rate = yield_pct / 100.0
+
+    print(
+        f"UK 1-year gilt yield "
+        f"({gilt_date}): {risk_free_rate:.4%}"
+    )
+
+    # Historical market data
+    prices, log_returns = get_market_data(
+        tickers,
+        years=YEARS
+    )
+
+    print(
+        f"Using {len(log_returns.columns)} stocks "
+        f"and {len(log_returns)} observations."
+    )
+
+    # Expected returns
+    expected_returns = calculate_expected_returns(
+        log_returns,
+        trading_days=TRADING_DAYS
+    )
+
+    # Covariance matrix
+    covariance = calculate_covariance_matrix(
+        log_returns,
+        trading_days=TRADING_DAYS
+    )
+
+    # Only retain stocks which exist in all datasets.
+    common_tickers = (
+        expected_returns.index
+        .intersection(covariance.index)
+    )
+
+    expected_returns = expected_returns.loc[common_tickers]
+    covariance = covariance.loc[
+        common_tickers,
+        common_tickers
+    ]
+
+    ftse_df = ftse_df[
+        ftse_df["yfinance_ticker"].isin(common_tickers)
+    ]
+
+    # saves data for C++
+    save_assets(
+        ftse_df,
+        expected_returns,
+        f"{OUTPUT_DIR}/assets.csv"
+    )
+
+    save_covariance(
+        covariance,
+        f"{OUTPUT_DIR}/covariance.csv"
+    )
+
+    save_metadata(
+        risk_free_rate,
+        log_returns.index.min().date(),
+        log_returns.index.max().date(),
+        YEARS,
+        f"{OUTPUT_DIR}/metadata.csv",
+        TRADING_DAYS
+    )
+
+    print("Portfolio optimisation data generated.")
