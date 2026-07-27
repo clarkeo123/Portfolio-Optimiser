@@ -78,14 +78,24 @@ def get_uk_1y_gilt_yield():
  
     raise ValueError("No populated 1-year yield found in the sheet")
 
-def get_market_data(tickers: list[str], years: int = 3):
-    # returns a prices dataframe and log returns dataframe for the given tickers
-    # over the last 'years' years.
+FTSE100_INDEX = "^FTSE"
+
+
+def get_market_data(tickers: list[str], years: int = 5):
+    # Returns:
+    #   stock_prices
+    #   stock_log_returns
+    #   market_log_returns
+    #   start_date
+    #   end_date
+
     end_date = pd.Timestamp.today().normalize()
     start_date = end_date - pd.DateOffset(years=years)
 
+    download_tickers = list(tickers) + [FTSE100_INDEX]
+
     data = yf.download(
-        tickers,
+        download_tickers,
         start=start_date.strftime("%Y-%m-%d"),
         end=(end_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
         interval="1d",
@@ -101,104 +111,193 @@ def get_market_data(tickers: list[str], years: int = 3):
         try:
             close = data[ticker]["Close"]
         except KeyError:
+            print(f"Warning: no data found for {ticker}")
             continue
 
         close = close.dropna()
 
         if len(close) < 2:
+            print(f"Warning: insufficient data for {ticker}")
             continue
 
         prices[ticker] = close
 
-    prices_df = pd.DataFrame(prices).sort_index()
+    stock_prices = pd.DataFrame(prices).sort_index()
 
-    # gets log returns
-    log_returns = np.log(prices_df / prices_df.shift(1)).dropna(how="all")
+    # FTSE 100 index prices.
+    try:
+        market_prices = (
+            data[FTSE100_INDEX]["Close"]
+            .dropna()
+        )
+    except KeyError:
+        raise ValueError(
+            "Could not download FTSE 100 index data (^FTSE)."
+        )
 
-    # removes stocks which have no usable return data.
-    log_returns = log_returns.dropna(axis=1, how="all")
-
-    log_returns = log_returns.dropna(axis=0, how="any")
-
-    return prices_df, log_returns
-
-def calculate_expected_returns(log_returns: pd.DataFrame,
-                               trading_days: int = 252) -> pd.Series:
-    mean_daily_log_return = log_returns.mean()
-
-    annualised_return = (
-        np.exp(mean_daily_log_return * trading_days) - 1
+    # Calculate log returns.
+    stock_log_returns = np.log(
+        stock_prices / stock_prices.shift(1)
     )
+
+    market_log_returns = np.log(
+        market_prices / market_prices.shift(1)
+    )
+
+    # Align everything by date, but DO NOT remove dates
+    # just because one stock is missing.
+    combined_returns = pd.concat(
+        [
+            stock_log_returns,
+            market_log_returns.rename(FTSE100_INDEX)
+        ],
+        axis=1
+    )
+
+    stock_log_returns = combined_returns.drop(
+        columns=FTSE100_INDEX
+    )
+
+    market_log_returns = combined_returns[
+        FTSE100_INDEX
+    ]
+
+    return (
+        stock_prices,
+        stock_log_returns,
+        market_log_returns,
+        start_date,
+        end_date
+    )
+
+def calculate_market_return(market_log_returns, trading_days=252):
+    # annualised historical FTSE 100 return.
+    mean_daily_log_return = market_log_returns.mean()
+
+    annualised_log_return = (mean_daily_log_return * trading_days)
+
+    annualised_return = (np.exp(annualised_log_return) - 1)
 
     return annualised_return
 
-def calculate_covariance_matrix(log_returns: pd.DataFrame,
-                                trading_days: int = 252) -> pd.DataFrame:
+
+def calculate_betas(
+    stock_log_returns,
+    market_log_returns
+):
+    # Calculate beta for each stock:
+    #
+    # beta = Cov(stock, market) / Var(market)
+
+    betas = {}
+
+    for ticker in stock_log_returns.columns:
+
+        aligned = pd.concat(
+            [
+                stock_log_returns[ticker],
+                market_log_returns
+            ],
+            axis=1
+        ).dropna()
+
+        stock_returns = aligned.iloc[:, 0]
+        market_returns = aligned.iloc[:, 1]
+
+        market_variance = market_returns.var(
+            ddof=1
+        )
+
+        if market_variance <= 0:
+            raise ValueError(
+                f"Market variance is zero for {ticker}."
+            )
+
+        covariance = stock_returns.cov(
+            market_returns
+        )
+
+        betas[ticker] = (
+            covariance / market_variance
+        )
+
+    return pd.Series(
+        betas,
+        name="Beta"
+    )
+
+def calculate_capm_returns(betas, risk_free_rate, market_return):
+    market_risk_premium = market_return - risk_free_rate
+
+    expected_returns = risk_free_rate + (betas * market_risk_premium)
+
+    expected_returns.name = "ExpectedReturn"
+
+    return expected_returns
+
+def calculate_covariance_matrix(
+    log_returns: pd.DataFrame,
+    trading_days: int = 252
+) -> pd.DataFrame:
     daily_covariance = log_returns.cov()
 
     annualised_covariance = daily_covariance * trading_days
 
     return annualised_covariance
 
-def save_assets(
-    tickers_df: pd.DataFrame,
-    expected_returns: pd.Series,
-    output_path: str
-):
-    assets = tickers_df[
-        ["company", "yfinance_ticker"]
-    ].copy()
+def save_assets(tickers_df, betas, expected_returns, output_path):
+    assets = tickers_df[["company", "ticker", "yfinance_ticker"]].copy()
 
     assets = assets.rename(
         columns={
             "company": "Company",
-            "yfinance_ticker": "Ticker"
+            "ticker": "Ticker",
+            "yfinance_ticker": "YFinanceTicker"
         }
     )
 
-    assets["ExpectedReturn"] = (
-        assets["Ticker"]
-        .map(expected_returns)
-    )
+    assets["Beta"] = assets["YFinanceTicker"].map(betas)
 
-    assets = assets.dropna(subset=["ExpectedReturn"])
+    assets["ExpectedReturn"] = assets["YFinanceTicker"].map(expected_returns)
 
-    assets.to_csv(
-        output_path,
-        index=False
-    )
+    assets = assets.dropna(subset=["Beta", "ExpectedReturn"])
 
-def save_covariance(
-    covariance: pd.DataFrame,
-    output_path: str
-):
-    covariance.to_csv(
-        output_path,
-        index_label="Ticker"
-    )
+    assets.to_csv(output_path, index=False)
+
+def save_covariance(covariance: pd.DataFrame, output_path: str):
+    covariance.to_csv(output_path, index_label="Ticker")
 
 def save_metadata(
-    risk_free_rate: float,
+    risk_free_rate,
+    market_return,
     start_date,
     end_date,
-    years: int,
-    output_path: str,
-    trading_days: int = 252
+    years,
+    number_of_stocks,
+    number_of_observations,
+    output_path,
+    trading_days=252
 ):
     metadata = pd.DataFrame({
         "Parameter": [
             "RiskFreeRate",
+            "MarketReturn",
             "StartDate",
             "EndDate",
             "Years",
-            "TradingDaysPerYear",
+            "NumberOfStocks",
+            "NumberOfObservations",
+            "TradingDaysPerYear"
         ],
         "Value": [
             risk_free_rate,
+            market_return,
             start_date,
             end_date,
             years,
-            trading_days,
+            number_of_stocks,
+            number_of_observations,
+            trading_days
         ]
     })
 
@@ -207,7 +306,56 @@ def save_metadata(
         index=False
     )
 
+def filter_stocks_by_data_quality(
+    stock_log_returns,
+    minimum_data_fraction=0.95
+):
+    """
+    Remove stocks which have less than the required fraction
+    of available observations.
+
+    For example, 0.95 means a stock must have at least 95%
+    of the observations available.
+    """
+
+    total_observations = len(stock_log_returns)
+
+    minimum_observations = (
+        total_observations
+        * minimum_data_fraction
+    )
+
+    valid_tickers = []
+
+    for ticker in stock_log_returns.columns:
+
+        available_observations = (
+            stock_log_returns[ticker]
+            .notna()
+            .sum()
+        )
+
+        fraction_available = (
+            available_observations
+            / total_observations
+        )
+
+        if available_observations >= minimum_observations:
+            valid_tickers.append(ticker)
+
+        else:
+            print(
+                f"Removing {ticker}: "
+                f"{fraction_available:.2%} "
+                f"of observations available."
+            )
+
+    return stock_log_returns[
+        valid_tickers
+    ]
+
 if __name__ == "__main__":
+
     YEARS = 5
     TRADING_DAYS = 252
     OUTPUT_DIR = "portfolio_data"
@@ -220,73 +368,96 @@ if __name__ == "__main__":
 
     tickers = ftse_df["yfinance_ticker"].tolist()
 
-    # Risk-free rate
+    print(f"Found {len(tickers)} FTSE 100 constituents.")
+
+    # risk-free rate
     gilt_date, yield_pct = get_uk_1y_gilt_yield()
+
     risk_free_rate = yield_pct / 100.0
 
+    print(f"UK 1-year gilt yield ({gilt_date}): {risk_free_rate:.4%}")
+
+    # historical stock + FTSE 100 data
+    (
+        prices, stock_log_returns, market_log_returns, start_date, end_date
+    ) = get_market_data(tickers, years=YEARS)
+
+    # filters stocks based on historical data availability
+    stock_log_returns = filter_stocks_by_data_quality(
+        stock_log_returns,
+        minimum_data_fraction=0.95
+    )
+
     print(
-        f"UK 1-year gilt yield "
-        f"({gilt_date}): {risk_free_rate:.4%}"
-    )
-
-    # Historical market data
-    prices, log_returns = get_market_data(
-        tickers,
-        years=YEARS
+        f"Retained {len(stock_log_returns.columns)} "
+        f"stocks after data-quality filtering."
     )
 
     print(
-        f"Using {len(log_returns.columns)} stocks "
-        f"and {len(log_returns)} observations."
+        f"Using {len(stock_log_returns.columns)} stocks "
+        f"and {len(stock_log_returns)} observations."
     )
 
-    # Expected returns
-    expected_returns = calculate_expected_returns(
-        log_returns,
+    # historical FTSE 100 market return
+    market_return = calculate_market_return(
+        market_log_returns,
         trading_days=TRADING_DAYS
     )
 
-    # Covariance matrix
+    print(
+        f"Historical FTSE 100 return: "
+        f"{market_return:.4%}"
+    )
+
+    # stock betas
+    betas = calculate_betas(stock_log_returns, market_log_returns)
+
+    # CAPM expected returns
+    expected_returns = calculate_capm_returns(
+        betas,
+        risk_free_rate,
+        market_return
+    )
+
+    # covariance matrix
     covariance = calculate_covariance_matrix(
-        log_returns,
+        stock_log_returns,
         trading_days=TRADING_DAYS
     )
 
-    # Only retain stocks which exist in all datasets.
+    # makes sure all datasets contain the same stocks
     common_tickers = (
-        expected_returns.index
+        stock_log_returns.columns
+        .intersection(expected_returns.index)
         .intersection(covariance.index)
     )
 
-    expected_returns = expected_returns.loc[common_tickers]
-    covariance = covariance.loc[
-        common_tickers,
-        common_tickers
-    ]
+    stock_log_returns = stock_log_returns[common_tickers]
 
-    ftse_df = ftse_df[
-        ftse_df["yfinance_ticker"].isin(common_tickers)
-    ]
+    betas = betas[common_tickers]
+
+    expected_returns = expected_returns[common_tickers]
+
+    covariance = covariance.loc[common_tickers, common_tickers]
+
+    ftse_df = ftse_df[ftse_df["yfinance_ticker"].isin(common_tickers)]
 
     # saves data for C++
-    save_assets(
-        ftse_df,
-        expected_returns,
-        f"{OUTPUT_DIR}/assets.csv"
-    )
+    save_assets(ftse_df, betas, expected_returns, f"{OUTPUT_DIR}/assets.csv")
 
-    save_covariance(
-        covariance,
-        f"{OUTPUT_DIR}/covariance.csv"
-    )
+    save_covariance(covariance, f"{OUTPUT_DIR}/covariance.csv")
 
     save_metadata(
         risk_free_rate,
-        log_returns.index.min().date(),
-        log_returns.index.max().date(),
+        market_return,
+        start_date.date(),
+        end_date.date(),
         YEARS,
+        len(common_tickers),
+        len(stock_log_returns),
         f"{OUTPUT_DIR}/metadata.csv",
         TRADING_DAYS
     )
 
+    print()
     print("Portfolio optimisation data generated.")

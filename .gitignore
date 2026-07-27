@@ -217,5 +217,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-#VS Code Settings
+# VS Code Settings
 .vscode/
+
+# CSV Files
+portfolio_data/
