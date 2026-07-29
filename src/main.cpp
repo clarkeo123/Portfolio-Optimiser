@@ -6,6 +6,7 @@
 
 #include "MarketData.hpp"
 #include "Portfolio.hpp"
+#include "GeneticAlgorithm.hpp"
 
 
 int main() {
@@ -46,87 +47,195 @@ int main() {
             << marketData.marketReturn * 100.0
             << "%\n\n";
 
-        // creates a simple test portfolio
-        // every stock an equal weight and nothing in cash.
+        // user inputs
 
-        Portfolio portfolio;
+        GASettings settings;
 
-        portfolio.weights =
-            std::vector<double>(n, 1.0 / static_cast<double>(n));
-
-        portfolio.cashWeight = 0.0;
-
-        // calculates portfolio metrics
-        portfolio.expectedReturn =
-            calculateExpectedReturn(portfolio, marketData);
-
-        portfolio.volatility = calculateVolatility(portfolio, marketData);
-
-        portfolio.sharpeRatio = calculateSharpeRatio(portfolio, marketData);
-
-
-        // displays portfolio metrics
         std::cout
-            << "Equal-weight portfolio\n"
-            << "----------------------\n";
+            << "Genetic algorithm settings\n"
+            << "--------------------------\n";
+
+        std::cout << "Population size [500]: ";
+
+        std::cin >> settings.populationSize;
+
+        if (!std::cin) {
+            settings.populationSize = 500;
+            std::cin.clear();
+        }
+
+        std::cout << "Number of generations [500]: ";
+
+        std::cin >> settings.generations;
+
+        if (!std::cin) {
+            settings.generations = 500;
+            std::cin.clear();
+        }
+
+        // stock weight constraints
+
+        std::cout
+            << "\nStock weight constraints\n"
+            << "------------------------\n";
+
+        std::cout
+            << "Minimum stock weight "
+               "(e.g. -0.05): ";
+
+        std::cin >> settings.minimumStockWeight;
+
+        std::cout << "Maximum stock weight (e.g. 0.10): ";
+
+        std::cin >> settings.maximumStockWeight;
+
+        // objective weights
+
+        std::cout
+            << "\nObjective weights\n"
+            << "-----------------\n";
+
+        std::cout << "Expected return weight: ";
+
+        std::cin >> settings.returnWeight;
+
+        std::cout << "Volatility weight: ";
+
+        std::cin >> settings.volatilityWeight;
+
+        std::cout << "Sharpe ratio weight: ";
+
+        std::cin >> settings.sharpeWeight;
+
+        // GA parameters
+
+        settings.mutationRate = 0.05;
+
+        settings.mutationStrength = 0.02;
+
+        settings.tournamentSize = 5;
+
+        settings.eliteFraction = 0.05;
+
+        // display settings
+
+        std::cout << "\nRunning genetic algorithm...\n\n";
+
+        std::cout
+            << "Population: "
+            << settings.populationSize
+            << '\n';
+
+        std::cout
+            << "Generations: "
+            << settings.generations
+            << '\n';
+
+        std::cout
+            << "Minimum stock weight: "
+            << settings.minimumStockWeight * 100.0
+            << "%\n";
+
+        std::cout
+            << "Maximum stock weight: "
+            << settings.maximumStockWeight * 100.0
+            << "%\n";
+
+        std::cout
+            << "Return objective weight: "
+            << settings.returnWeight
+            << '\n';
+
+        std::cout
+            << "Volatility objective weight: "
+            << settings.volatilityWeight
+            << '\n';
+
+        std::cout
+            << "Sharpe objective weight: "
+            << settings.sharpeWeight
+            << "\n\n";
+
+        // runs GA
+
+        GeneticAlgorithm geneticAlgorithm(marketData, settings);
+
+        Portfolio bestPortfolio = geneticAlgorithm.run();
+
+        // displays result
+
+        std::cout
+            << "\nBest portfolio found\n"
+            << "====================\n\n";
 
         std::cout
             << "Expected return: "
-            << portfolio.expectedReturn * 100.0
+            << bestPortfolio.expectedReturn * 100.0
             << "%\n";
 
         std::cout
             << "Volatility:       "
-            << portfolio.volatility * 100.0
+            << bestPortfolio.volatility * 100.0
             << "%\n";
 
         std::cout
             << "Sharpe ratio:     "
-            << portfolio.sharpeRatio
-            << "\n";
+            << bestPortfolio.sharpeRatio
+            << '\n';
 
-
-        // tests the multi-objective fitness
-        // arbitrary values for testing only
-
-        double returnWeight = 0.3;
-        double volatilityWeight = 0.2;
-        double sharpeWeight = 0.5;
+        std::cout
+            << "Cash:             "
+            << bestPortfolio.cashWeight
+                * 100.0
+            << "%\n";
 
         double fitness =
             calculateFitness(
-                portfolio,
+                bestPortfolio,
                 marketData,
-                returnWeight,
-                volatilityWeight,
-                sharpeWeight
+                settings.returnWeight,
+                settings.volatilityWeight,
+                settings.sharpeWeight
             );
 
         std::cout
             << "Fitness:          "
             << fitness
-            << "\n";
+            << "\n\n";
 
-        // checks the weights
-        double totalWeight =
-            std::accumulate(
-                portfolio.weights.begin(),
-                portfolio.weights.end(),
-                0.0
-            );
-
-        totalWeight += portfolio.cashWeight;
+        // displays stock positions
 
         std::cout
-            << "\nTotal portfolio weight: "
-            << totalWeight
-            << '\n';
+            << "Portfolio holdings\n"
+            << "------------------\n";
 
-        std::cout
-            << "\nProgram completed successfully.\n";
-    } catch (const std::exception& exception){
+        for (std::size_t i = 0; i < marketData.assets.size(); ++i) {
+            double weight =bestPortfolio.weights[i];
+
+
+            // only displays positions which are
+            // meaningfully different from zero
+
+            if (std::abs(weight) > 0.0001)
+            {
+                std::cout
+                    << std::setw(8)
+                    << marketData.assets[i].ticker
+                    << "  "
+                    << std::setw(12)
+                    << marketData.assets[i].company
+                    << "  "
+                    << std::fixed
+                    << std::setprecision(4)
+                    << weight * 100.0
+                    << "%\n";
+            }
+        }
+
+        std::cout << "\nProgram completed successfully.\n";
+    } catch (const std::exception& exception) {
         std::cerr
-            << "ERROR: "
+            << "\nERROR: "
             << exception.what()
             << '\n';
 

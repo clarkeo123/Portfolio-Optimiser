@@ -5,7 +5,6 @@
 
 #include "MarketData.hpp"
 
-
 struct Portfolio
 {
     // stock weights
@@ -21,13 +20,11 @@ struct Portfolio
     double sharpeRatio;
 };
 
-
 // calculates portfolio expected return
 double calculateExpectedReturn(
     const Portfolio& portfolio,
     const MarketData& marketData
 );
-
 
 // calculates portfolio volatility
 double calculateVolatility(
@@ -35,13 +32,11 @@ double calculateVolatility(
     const MarketData& marketData
 );
 
-
 // calculates Sharpe ratio
 double calculateSharpeRatio(
     const Portfolio& portfolio,
     const MarketData& marketData
 );
-
 
 // calculates the multi-objective fitness
 double calculateFitness(

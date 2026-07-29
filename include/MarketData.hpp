@@ -16,7 +16,6 @@ struct Asset
     double expectedReturn;
 };
 
-
 struct MarketData
 {
     std::vector<Asset> assets;
@@ -33,7 +32,6 @@ struct MarketData
     int numberOfObservations;
     int tradingDaysPerYear;
 };
-
 
 MarketData loadMarketData(
     const std::string& dataDirectory
