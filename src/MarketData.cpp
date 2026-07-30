@@ -102,10 +102,21 @@ void loadCovariance(const std::string& filename, MarketData& marketData) {
 
     const std::size_t numberOfAssets = marketData.assets.size();
 
-    if (headers.size() != numberOfAssets + 1){
+    if (headers.size() != numberOfAssets + 1) {
         throw std::runtime_error(
             "Covariance matrix size does not match the number of assets."
         );
+    }
+
+    for (std::size_t i = 0; i < numberOfAssets; ++i) {
+        if (headers[i + 1] != marketData.assets[i].yfinanceTicker) {
+            throw std::runtime_error(
+                "covariance.csv column order does not match assets.csv row "
+                "order at position " + std::to_string(i) +
+                " (expected '" + marketData.assets[i].yfinanceTicker +
+                "', found '" + headers[i + 1] + "')."
+            );
+        }
     }
 
     marketData.covariance = Eigen::MatrixXd(numberOfAssets, numberOfAssets);
@@ -123,6 +134,13 @@ void loadCovariance(const std::string& filename, MarketData& marketData) {
 
         if (row >= numberOfAssets) {
             throw std::runtime_error("Too many rows in covariance.csv.");
+        }
+
+        if (values[0] != marketData.assets[row].yfinanceTicker) {
+            throw std::runtime_error(
+                "covariance.csv row order does not match assets.csv row "
+                "order at row " + std::to_string(row) + "."
+            );
         }
 
         for (std::size_t column = 0; column < numberOfAssets; ++column) {

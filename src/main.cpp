@@ -3,6 +3,8 @@
 #include <vector>
 #include <numeric>
 #include <stdexcept>
+#include <string>
+#include <cmath>
 
 #include "MarketData.hpp"
 #include "Portfolio.hpp"
@@ -107,6 +109,16 @@ int main() {
 
         std::cin >> settings.sharpeWeight;
 
+        std::cout << "Random seed: ";
+        std::cin >> settings.randomSeed;
+
+        if (!std::cin) {
+            throw std::runtime_error(
+                "Invalid or missing input while reading genetic algorithm "
+                "settings."
+            );
+        }
+
         // GA parameters
 
         settings.mutationRate = 0.05;
@@ -116,6 +128,8 @@ int main() {
         settings.tournamentSize = 5;
 
         settings.eliteFraction = 0.05;
+
+        settings.historyFile = "portfolio_data/optimisation_history.csv";
 
         // display settings
 
@@ -130,6 +144,11 @@ int main() {
             << "Generations: "
             << settings.generations
             << '\n';
+
+        std::cout 
+            << "Random seed: "
+            << settings.randomSeed
+            << "\n";
 
         std::cout
             << "Minimum stock weight: "
@@ -188,20 +207,6 @@ int main() {
             << bestPortfolio.cashWeight
                 * 100.0
             << "%\n";
-
-        double fitness =
-            calculateFitness(
-                bestPortfolio,
-                marketData,
-                settings.returnWeight,
-                settings.volatilityWeight,
-                settings.sharpeWeight
-            );
-
-        std::cout
-            << "Fitness:          "
-            << fitness
-            << "\n\n";
 
         // displays stock positions
 

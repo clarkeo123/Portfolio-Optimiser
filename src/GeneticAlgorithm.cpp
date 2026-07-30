@@ -2,9 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 
 GeneticAlgorithm::GeneticAlgorithm(
     const MarketData& marketData,
@@ -12,7 +16,7 @@ GeneticAlgorithm::GeneticAlgorithm(
 )
     : marketData(marketData),
       settings(settings),
-      randomGenerator(std::random_device{}())
+      randomGenerator(settings.randomSeed)
 {
     if (settings.populationSize <= 0) {
         throw std::runtime_error("Population size must be positive.");
@@ -30,6 +34,10 @@ GeneticAlgorithm::GeneticAlgorithm(
 
     if (settings.tournamentSize <= 0) {
         throw std::runtime_error("Tournament size must be positive.");
+    }
+
+    if (settings.eliteFraction < 0.0 || settings.eliteFraction > 1.0) {
+        throw std::invalid_argument("Elite fraction must be between 0 and 1.");
     }
 }
 
@@ -119,55 +127,39 @@ void GeneticAlgorithm::repairPortfolio(Portfolio& portfolio) {
         return;
     }
 
-    /*
-        stocks currently account for more than 100%
-
-        needs to reduce stock weights until their total is exactly 1
-
-        cash will then be zero
-    */
-
-    double excess = stockTotal - 1.0;
-
     //  repeatedly removes weight from stocks which are above their minimum
 
-    for (std::size_t iteration = 0;
-         iteration < n && excess > 1e-12;
-         ++iteration)
-    {
-        double availableReduction = 0.0;
+    // If stocks use more than 100%, reduce the stock
+    // allocations proportionally according to how much
+    // each one can be reduced above its minimum.
+    double amountToRemove = stockTotal - 1.0;
 
-        for (double weight : portfolio.weights) {
-            availableReduction += weight - settings.minimumStockWeight;
-        }
+    double totalAvailableReduction = 0.0;
 
-        if (availableReduction <= 0.0) {
-            throw std::runtime_error(
-                "Portfolio constraints cannot produce "
-                "a fully invested portfolio."
-            );
-        }
-
-        for (double& weight : portfolio.weights) {
-            double available = weight - settings.minimumStockWeight;
-
-            if (available <= 0.0) { continue; }
-
-            double reduction = excess * (available / availableReduction);
-
-            reduction = std::min(reduction, available);
-
-            weight -= reduction;
-            excess -= reduction;
-        }
+    for (double weight : portfolio.weights) {
+        totalAvailableReduction += weight - settings.minimumStockWeight;
     }
 
-    // removes any tiny floating-point error
+    if (totalAvailableReduction <= 0.0) {
+        throw std::runtime_error(
+            "Unable to repair portfolio: "
+            "stock weights exceed 100% but cannot be reduced."
+        );
+    }
 
-    if (std::abs(excess) < 1e-10) { excess = 0.0;}
+    for (double& weight : portfolio.weights) {
+        double availableReduction = weight - settings.minimumStockWeight;
 
-    if (excess > 1e-8) {
-        throw std::runtime_error("Unable to repair portfolio weights.");
+        double reduction =
+            amountToRemove * (availableReduction / totalAvailableReduction);
+
+        weight -= reduction;
+
+        weight = std::clamp(
+            weight,
+            settings.minimumStockWeight,
+            settings.maximumStockWeight
+        );
     }
 
     portfolio.cashWeight = 0.0;
@@ -176,11 +168,11 @@ void GeneticAlgorithm::repairPortfolio(Portfolio& portfolio) {
 
     //  sum(weights) + cash = 1
 
-    double finalStockTotal = 0.0;
+    stockTotal = 0.0;
 
-    for (double weight : portfolio.weights) { finalStockTotal += weight;}
+    for (double weight : portfolio.weights) { stockTotal += weight;}
 
-    portfolio.cashWeight = 1.0 - finalStockTotal;
+    portfolio.cashWeight = 1.0 - stockTotal;
 
     if (portfolio.cashWeight < -1e-9) {
         throw std::runtime_error("Portfolio repair produced negative cash.");
@@ -215,6 +207,119 @@ bool GeneticAlgorithm::isValidPortfolio(const Portfolio& portfolio) {
     return std::abs(totalWeight - 1.0) < 1e-8;
 }
 
+void GeneticAlgorithm::calculateObjectiveRanges() {
+    /*
+     * Generate a separate calibration population.
+     *
+     * The ranges are fixed before the actual optimisation
+     * begins, which means fitness values remain comparable
+     * between generations.
+     */
+
+    const int calibrationPopulationSize =
+        std::max(settings.populationSize * 10, 1000);
+
+    objectiveRanges.minimumReturn = std::numeric_limits<double>::max();
+
+    objectiveRanges.maximumReturn = std::numeric_limits<double>::lowest();
+
+    objectiveRanges.minimumVolatility = std::numeric_limits<double>::max();
+
+    objectiveRanges.maximumVolatility = std::numeric_limits<double>::lowest();
+
+    objectiveRanges.minimumSharpe = std::numeric_limits<double>::max();
+
+    objectiveRanges.maximumSharpe = std::numeric_limits<double>::lowest();
+
+    for (int i = 0; i < calibrationPopulationSize; ++i) {
+        Portfolio portfolio = generateRandomPortfolio();
+
+        portfolio.expectedReturn =
+            calculateExpectedReturn(portfolio, marketData);
+
+        portfolio.volatility = calculateVolatility(portfolio, marketData);
+
+        portfolio.sharpeRatio = calculateSharpeRatio(portfolio, marketData);
+
+        objectiveRanges.minimumReturn =
+            std::min(objectiveRanges.minimumReturn, portfolio.expectedReturn);
+
+        objectiveRanges.maximumReturn =
+            std::max(objectiveRanges.maximumReturn, portfolio.expectedReturn);
+
+        objectiveRanges.minimumVolatility =
+            std::min(objectiveRanges.minimumVolatility, portfolio.volatility);
+
+        objectiveRanges.maximumVolatility =
+            std::max(objectiveRanges.maximumVolatility, portfolio.volatility);
+
+        objectiveRanges.minimumSharpe =
+            std::min(objectiveRanges.minimumSharpe, portfolio.sharpeRatio);
+
+        objectiveRanges.maximumSharpe =
+            std::max(objectiveRanges.maximumSharpe, portfolio.sharpeRatio);
+    }
+
+    std::cout << "\nObjective normalisation ranges\n";
+    std::cout << "-----------------------------\n";
+
+    std::cout << std::fixed << std::setprecision(4);
+
+    std::cout
+        << "Expected return: "
+        << objectiveRanges.minimumReturn * 100.0
+        << "% to "
+        << objectiveRanges.maximumReturn * 100.0
+        << "%\n";
+
+    std::cout
+        << "Volatility:       "
+        << objectiveRanges.minimumVolatility * 100.0
+        << "% to "
+        << objectiveRanges.maximumVolatility * 100.0
+        << "%\n";
+
+    std::cout
+        << "Sharpe ratio:     "
+        << objectiveRanges.minimumSharpe
+        << " to "
+        << objectiveRanges.maximumSharpe
+        << "\n";
+}
+
+double GeneticAlgorithm::calculateNormalisedReturn(
+    double expectedReturn
+) const {
+    double range =
+        objectiveRanges.maximumReturn - objectiveRanges.minimumReturn;
+
+    if (std::abs(range) < 1e-12) { return 0.5; }
+
+    return (expectedReturn - objectiveRanges.minimumReturn) / range;
+}
+
+double GeneticAlgorithm::calculateNormalisedVolatility(
+    double volatility
+) const {
+    double range =
+        objectiveRanges.maximumVolatility - objectiveRanges.minimumVolatility;
+
+    if (std::abs(range) < 1e-12) { return 0.5; }
+
+    return (volatility - objectiveRanges.minimumVolatility) / range;
+}
+
+double GeneticAlgorithm::calculateNormalisedSharpe(
+    double sharpeRatio
+) const{
+    double range =
+        objectiveRanges.maximumSharpe - objectiveRanges.minimumSharpe;
+
+    if (std::abs(range) < 1e-12) { return 0.5; }
+
+    return (sharpeRatio - objectiveRanges.minimumSharpe) / range;
+}
+
 // fitness
 
 double GeneticAlgorithm::evaluateFitness(Portfolio& portfolio)
@@ -225,13 +330,21 @@ double GeneticAlgorithm::evaluateFitness(Portfolio& portfolio)
 
     portfolio.sharpeRatio = calculateSharpeRatio(portfolio, marketData);
 
-    return calculateFitness(
-        portfolio,
-        marketData,
-        settings.returnWeight,
-        settings.volatilityWeight,
-        settings.sharpeWeight
-    );
+    const double normalisedReturn =
+        calculateNormalisedReturn(portfolio.expectedReturn);
+
+    const double normalisedVolatility =
+        calculateNormalisedVolatility(portfolio.volatility);
+
+    const double normalisedSharpe =
+        calculateNormalisedSharpe(portfolio.sharpeRatio);
+
+    portfolio.fitness =
+        settings.returnWeight * normalisedReturn
+        - settings.volatilityWeight * normalisedVolatility
+        + settings.sharpeWeight * normalisedSharpe;
+
+    return portfolio.fitness;
 }
 
 // tournament selection
@@ -239,30 +352,15 @@ double GeneticAlgorithm::evaluateFitness(Portfolio& portfolio)
 Portfolio GeneticAlgorithm::tournamentSelection(
     const std::vector<Portfolio>& population
 ) {
-    int populationSize = static_cast<int>(population.size());
+    int bestIndex = randomInt(0, static_cast<int>(population.size()) - 1);
+    double bestFitness = population[bestIndex].fitness;
 
-    int bestIndex = -1;
+    for (int i = 1; i < settings.tournamentSize; ++i) {
+        int index = randomInt(0, static_cast<int>(population.size()) - 1);
 
-    double bestFitness = -std::numeric_limits<double>::infinity();
-
-    for (int i = 0; i < settings.tournamentSize; ++i) {
-        int index = randomInt(0, populationSize - 1);
-
-        Portfolio candidate = population[index];
-
-        double fitness =
-            calculateFitness(
-                candidate,
-                marketData,
-                settings.returnWeight,
-                settings.volatilityWeight,
-                settings.sharpeWeight
-            );
-
-
-        if (fitness > bestFitness) {
-            bestFitness = fitness;
+        if (population[index].fitness > bestFitness) {
             bestIndex = index;
+            bestFitness = population[index].fitness;
         }
     }
 
@@ -339,9 +437,31 @@ void GeneticAlgorithm::mutate(Portfolio& portfolio) {
     repairPortfolio(portfolio);
 }
 
+void GeneticAlgorithm::saveHistory(
+    const std::vector<std::string>& history
+) const {
+    std::ofstream output(settings.historyFile);
+
+    if (!output) {
+        std::cerr
+            << "Warning: could not write optimisation "
+               "history to "
+            << settings.historyFile
+            << "\n";
+
+        return;
+    }
+
+    for (const std::string& line : history) { output << line << '\n'; }
+}
+
 // run genetic algorithm
 
 Portfolio GeneticAlgorithm::run(){
+    std::cout << "\nCalculating objective ranges...\n";
+
+    calculateObjectiveRanges();
+
     std::vector<Portfolio> population;
 
     population.reserve(settings.populationSize);
@@ -358,14 +478,25 @@ Portfolio GeneticAlgorithm::run(){
 
     Portfolio bestPortfolio = population[0];
 
-    double bestFitness =
-        calculateFitness(
-            bestPortfolio,
-            marketData,
-            settings.returnWeight,
-            settings.volatilityWeight,
-            settings.sharpeWeight
-        );
+    double bestFitness = bestPortfolio.fitness;
+
+    /*
+     * Store optimisation history.
+     *
+     * Fitness values are now comparable between
+     * generations because the normalisation ranges
+     * remain fixed.
+     */
+    std::vector<std::string> history;
+
+    history.push_back(
+        "Generation,"
+        "BestFitness,"
+        "ExpectedReturn,"
+        "Volatility,"
+        "SharpeRatio,"
+        "CashWeight"
+    );
 
     // evolution
 
@@ -386,26 +517,45 @@ Portfolio GeneticAlgorithm::run(){
         std::sort(
             population.begin(),
             population.end(),
-            [&](const Portfolio& a,
-                const Portfolio& b)
+            [](const Portfolio& a, const Portfolio& b)
             {
-                return calculateFitness(
-                    a,
-                    marketData,
-                    settings.returnWeight,
-                    settings.volatilityWeight,
-                    settings.sharpeWeight
-                )
-                >
-                calculateFitness(
-                    b,
-                    marketData,
-                    settings.returnWeight,
-                    settings.volatilityWeight,
-                    settings.sharpeWeight
-                );
+                return a.fitness > b.fitness;
             }
         );
+
+        Portfolio generationBest = population.front();
+
+        double generationBestFitness = generationBest.fitness;
+
+
+        if (generationBestFitness >
+            bestFitness)
+        {
+            bestPortfolio =
+                generationBest;
+
+            bestFitness =
+                generationBestFitness;
+        }
+
+
+        std::ostringstream historyLine;
+
+        historyLine
+            << generation
+            << ","
+            << std::setprecision(10)
+            << bestFitness
+            << ","
+            << bestPortfolio.expectedReturn
+            << ","
+            << bestPortfolio.volatility
+            << ","
+            << bestPortfolio.sharpeRatio
+            << ","
+            << bestPortfolio.cashWeight;
+
+        history.push_back(historyLine.str());
 
         // preserve the best portfolios.
 
@@ -433,25 +583,6 @@ Portfolio GeneticAlgorithm::run(){
 
         population = std::move(newPopulation);
 
-        // track best solution
-
-        for (const Portfolio& portfolio : population) {
-            double fitness =
-                calculateFitness(
-                    portfolio,
-                    marketData,
-                    settings.returnWeight,
-                    settings.volatilityWeight,
-                    settings.sharpeWeight
-                );
-
-            if (fitness > bestFitness) {
-                bestFitness = fitness;
-
-                bestPortfolio = portfolio;
-            }
-        }
-
 
         // print progress periodically
 
@@ -466,6 +597,14 @@ Portfolio GeneticAlgorithm::run(){
                 << '\n';
         }
     }
+
+    saveHistory(history);
+
+    std::cout
+        << "\nOptimisation history saved to: "
+        << settings.historyFile
+        << "\n";
+
 
     return bestPortfolio;
 }

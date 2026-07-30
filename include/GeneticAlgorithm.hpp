@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <random>
+#include <string>
 
 #include "MarketData.hpp"
 #include "Portfolio.hpp"
@@ -20,14 +21,30 @@ struct GASettings
 
     double eliteFraction;
 
-    // Objective weights.
+    // objective weights
     double returnWeight;
     double volatilityWeight;
     double sharpeWeight;
 
-    // Stock constraints.
+    // stock constraints
     double minimumStockWeight;
     double maximumStockWeight;
+
+    unsigned int randomSeed;
+
+    std::string historyFile;
+};
+
+struct ObjectiveRanges
+{
+    double minimumReturn;
+    double maximumReturn;
+
+    double minimumVolatility;
+    double maximumVolatility;
+
+    double minimumSharpe;
+    double maximumSharpe;
 };
 
 
@@ -49,6 +66,7 @@ private:
 
     std::mt19937 randomGenerator;
 
+    ObjectiveRanges objectiveRanges;
 
     Portfolio generateRandomPortfolio();
 
@@ -59,6 +77,24 @@ private:
     double evaluateFitness(
         Portfolio& portfolio
     );
+
+    double calculateNormalisedReturn(
+        double expectedReturn
+    ) const;
+
+    double calculateNormalisedVolatility(
+        double volatility
+    ) const;
+
+    double calculateNormalisedSharpe(
+        double sharpe
+    ) const;
+
+    void calculateObjectiveRanges();
+
+    void saveHistory(
+        const std::vector<std::string>& history
+    ) const;
 
     Portfolio tournamentSelection(
         const std::vector<Portfolio>& population

@@ -18,6 +18,9 @@ struct Portfolio
     double expectedReturn;
     double volatility;
     double sharpeRatio;
+
+    // cached composite fitness
+    double fitness;
 };
 
 // calculates portfolio expected return
@@ -36,15 +39,6 @@ double calculateVolatility(
 double calculateSharpeRatio(
     const Portfolio& portfolio,
     const MarketData& marketData
-);
-
-// calculates the multi-objective fitness
-double calculateFitness(
-    const Portfolio& portfolio,
-    const MarketData& marketData,
-    double returnWeight,
-    double volatilityWeight,
-    double sharpeWeight
 );
 
 #endif

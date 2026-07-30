@@ -80,39 +80,3 @@ double calculateSharpeRatio(
 
     return (expectedReturn - marketData.riskFreeRate) / volatility;
 }
-
-
-double calculateFitness(
-    const Portfolio& portfolio,
-    const MarketData& marketData,
-    double returnWeight,
-    double volatilityWeight,
-    double sharpeWeight
-)
-{
-    double expectedReturn = calculateExpectedReturn(portfolio, marketData);
-
-    double volatility = calculateVolatility(portfolio, marketData);
-
-    double sharpe = calculateSharpeRatio(portfolio, marketData);
-
-    /*
-        todo:
-
-            maximise expected return
-            minimise volatility
-            maximise Sharpe ratio
-
-        Therefore:
-
-            + return
-            - volatility
-            + Sharpe
-    */
-
-    return (
-        returnWeight * expectedReturn
-        - volatilityWeight * volatility
-        + sharpeWeight * sharpe
-    );
-}
