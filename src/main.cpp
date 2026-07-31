@@ -237,6 +237,60 @@ int main() {
             }
         }
 
+        // market-cap-weighted benchmark (effectively the FTSE 100 index)
+
+        Portfolio marketPortfolio =
+            buildMarketCapWeightedPortfolio(marketData);
+
+        std::cout
+            << "\nMarket-cap-weighted benchmark\n"
+            << "==============================\n\n";
+
+        std::cout
+            << "Expected return: "
+            << marketPortfolio.expectedReturn * 100.0
+            << "%\n";
+
+        std::cout
+            << "Volatility:       "
+            << marketPortfolio.volatility * 100.0
+            << "%\n";
+
+        std::cout
+            << "Sharpe ratio:     "
+            << marketPortfolio.sharpeRatio
+            << '\n';
+
+        // side-by-side comparison
+
+        std::cout
+            << "\nOptimised portfolio vs. benchmark\n"
+            << "==================================\n\n";
+
+        std::cout
+            << std::setw(20) << "Metric"
+            << std::setw(18) << "Optimised"
+            << std::setw(18) << "Benchmark"
+            << '\n';
+
+        std::cout
+            << std::setw(20) << "Expected return"
+            << std::setw(17) << bestPortfolio.expectedReturn * 100.0 << "%"
+            << std::setw(17) << marketPortfolio.expectedReturn * 100.0 << "%"
+            << '\n';
+
+        std::cout
+            << std::setw(20) << "Volatility"
+            << std::setw(17) << bestPortfolio.volatility * 100.0 << "%"
+            << std::setw(17) << marketPortfolio.volatility * 100.0 << "%"
+            << '\n';
+
+        std::cout
+            << std::setw(20) << "Sharpe ratio"
+            << std::setw(18) << bestPortfolio.sharpeRatio
+            << std::setw(18) << marketPortfolio.sharpeRatio
+            << '\n';
+
         std::cout << "\nProgram completed successfully.\n";
     } catch (const std::exception& exception) {
         std::cerr

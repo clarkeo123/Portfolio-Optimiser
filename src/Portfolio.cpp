@@ -80,3 +80,32 @@ double calculateSharpeRatio(
 
     return (expectedReturn - marketData.riskFreeRate) / volatility;
 }
+
+Portfolio buildMarketCapWeightedPortfolio(const MarketData& marketData) {
+    const std::size_t n = marketData.assets.size();
+
+    Portfolio portfolio;
+
+    portfolio.weights.resize(n);
+
+    for (std::size_t i = 0; i < n; ++i) {
+        portfolio.weights[i] = marketData.assets[i].marketCapWeight;
+    }
+
+    // market-cap weights are normalised in Python to sum to 1, but cash
+    // is recomputed here from the actual total to absorb any tiny
+    // floating-point drift rather than assuming it's exactly zero
+    double stockTotal = 0.0;
+
+    for (double weight : portfolio.weights) { stockTotal += weight; }
+
+    portfolio.cashWeight = 1.0 - stockTotal;
+
+    portfolio.expectedReturn = calculateExpectedReturn(portfolio, marketData);
+
+    portfolio.volatility = calculateVolatility(portfolio, marketData);
+
+    portfolio.sharpeRatio = calculateSharpeRatio(portfolio, marketData);
+
+    return portfolio;
+}

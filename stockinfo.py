@@ -235,6 +235,38 @@ def calculate_capm_returns(betas, risk_free_rate, market_return):
 
     return expected_returns
 
+def get_market_caps(tickers) -> pd.Series:
+    # returns a series of market capitalisations indexed by yfinance
+
+    market_caps = {}
+
+    for ticker in tickers:
+        try:
+            market_cap = yf.Ticker(ticker).fast_info["market_cap"]
+        except Exception:
+            market_cap = None
+
+        if not market_cap or market_cap <= 0:
+            print(f"Warning: no market cap found for {ticker}")
+            continue
+
+        market_caps[ticker] = market_cap
+
+    return pd.Series(market_caps, name="MarketCap")
+
+
+def calculate_market_cap_weights(market_caps: pd.Series) -> pd.Series:
+    # normalises market caps into portfolio weights that sum to 1
+    total = market_caps.sum()
+
+    if total <= 0:
+        raise ValueError("Total market capitalisation is zero or negative.")
+
+    weights = market_caps / total
+    weights.name = "MarketCapWeight"
+
+    return weights
+
 def calculate_covariance_matrix(
     log_returns: pd.DataFrame,
     trading_days: int = 252
@@ -245,7 +277,9 @@ def calculate_covariance_matrix(
 
     return annualised_covariance
 
-def save_assets(tickers_df, betas, expected_returns, output_path):
+def save_assets(
+    tickers_df, betas, expected_returns, market_cap_weights, output_path
+):
     assets = tickers_df[["company", "ticker", "yfinance_ticker"]].copy()
 
     assets = assets.rename(
@@ -260,7 +294,13 @@ def save_assets(tickers_df, betas, expected_returns, output_path):
 
     assets["ExpectedReturn"] = assets["YFinanceTicker"].map(expected_returns)
 
-    assets = assets.dropna(subset=["Beta", "ExpectedReturn"])
+    assets["MarketCapWeight"] = (
+        assets["YFinanceTicker"].map(market_cap_weights)
+    )
+
+    assets = assets.dropna(
+        subset=["Beta", "ExpectedReturn", "MarketCapWeight"]
+    )
 
     assets.to_csv(output_path, index=False)
 
@@ -442,9 +482,33 @@ if __name__ == "__main__":
 
     ftse_df = ftse_df[ftse_df["yfinance_ticker"].isin(common_tickers)]
 
-    # saves data for C++
-    save_assets(ftse_df, betas, expected_returns, f"{OUTPUT_DIR}/assets.csv")
+    # market capitalisations, for the market-cap-weighted benchmark portfolio
+    market_caps = get_market_caps(common_tickers)
 
+    # keep only stocks we could get a market cap for, preserving the
+    # existing order explicitly rather than relying on Index.intersection
+    common_tickers = [
+        ticker for ticker in common_tickers if ticker in market_caps.index
+    ]
+
+    stock_log_returns = stock_log_returns[common_tickers]
+    betas = betas[common_tickers]
+    expected_returns = expected_returns[common_tickers]
+    covariance = covariance.loc[common_tickers, common_tickers]
+    ftse_df = ftse_df[ftse_df["yfinance_ticker"].isin(common_tickers)]
+
+    market_cap_weights = calculate_market_cap_weights(
+        market_caps.loc[common_tickers]
+    )
+
+    # saves data for C++
+    save_assets(
+        ftse_df,
+        betas,
+        expected_returns,
+        market_cap_weights,
+        f"{OUTPUT_DIR}/assets.csv"
+    )
     save_covariance(covariance, f"{OUTPUT_DIR}/covariance.csv")
 
     save_metadata(

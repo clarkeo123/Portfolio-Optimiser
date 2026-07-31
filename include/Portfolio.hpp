@@ -41,4 +41,9 @@ double calculateSharpeRatio(
     const MarketData& marketData
 );
 
+// builds the market-cap-weighted benchmark portfolio (the "index" portfolio)
+Portfolio buildMarketCapWeightedPortfolio(
+    const MarketData& marketData
+);
+
 #endif

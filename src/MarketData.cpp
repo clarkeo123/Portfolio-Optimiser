@@ -61,7 +61,7 @@ void loadAssets(const std::string& filename, MarketData& marketData) {
 
         std::vector<std::string> values = splitCSVLine(line);
 
-        if (values.size() < 5) {
+                if (values.size() < 6) {
             throw std::runtime_error("Invalid row in assets.csv: " + line);
         }
 
@@ -74,6 +74,8 @@ void loadAssets(const std::string& filename, MarketData& marketData) {
         asset.beta = stringToDouble(values[3]);
 
         asset.expectedReturn = stringToDouble(values[4]);
+
+        asset.marketCapWeight = stringToDouble(values[5]);
 
         marketData.assets.push_back(asset);
     }

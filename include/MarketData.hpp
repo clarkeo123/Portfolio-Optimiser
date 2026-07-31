@@ -14,6 +14,7 @@ struct Asset
 
     double beta;
     double expectedReturn;
+    double marketCapWeight;
 };
 
 struct MarketData
