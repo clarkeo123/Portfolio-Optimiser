@@ -1,6 +1,7 @@
 #include "MarketData.hpp"
 
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <iostream>
@@ -198,7 +199,64 @@ void loadMetadata(const std::string& filename, MarketData& marketData) {
             marketData.numberOfObservations = stringToInt(value);
         } else if (parameter == "TradingDaysPerYear") {
             marketData.tradingDaysPerYear = stringToInt(value);
+        } else if (parameter == "BacktestStartDate") {
+            marketData.backtestStartDate = value;
+        } else if (parameter == "BacktestEndDate") {
+            marketData.backtestEndDate = value;
+        } else if (parameter == "FTSEForwardReturn") {
+            marketData.ftseForwardReturn = stringToDouble(value);
+            marketData.backtestAvailable = true;
         }
+    }
+}
+
+// loads backtest.csv (optional - only present if a backtest period
+// was generated). Matches rows to assets by ticker rather than row
+// position, since this file may be missing a few stocks relative to
+// assets.csv (e.g. ones delisted since the training end date).
+void loadBacktestData(const std::string& filename, MarketData& marketData) {
+    if (!marketData.backtestAvailable) { return; }
+
+    std::ifstream file(filename);
+
+    if (!file.is_open()) {
+        std::cerr
+            << "Warning: backtest metadata was found, but "
+            << filename
+            << " could not be opened. Disabling backtest.\n";
+
+        marketData.backtestAvailable = false;
+
+        return;
+    }
+
+    std::string line;
+
+    // skips header
+    std::getline(file, line);
+
+    std::map<std::string, double> forwardReturnsByTicker;
+
+    while (std::getline(file, line)) {
+        if (line.empty()) { continue; }
+
+        std::vector<std::string> values = splitCSVLine(line);
+
+        if (values.size() < 2) { continue; }
+
+        forwardReturnsByTicker[values[0]] = stringToDouble(values[1]);
+    }
+
+    for (Asset& asset : marketData.assets) {
+        auto it = forwardReturnsByTicker.find(asset.yfinanceTicker);
+
+        if (it == forwardReturnsByTicker.end()) {
+            throw std::runtime_error(
+                "No backtest forward return found for " + asset.ticker
+            );
+        }
+
+        asset.forwardReturn = it->second;
     }
 }
 
@@ -240,6 +298,8 @@ MarketData loadMarketData(const std::string& dataDirectory) {
     loadCovariance(dataDirectory + "/covariance.csv", marketData);
 
     loadMetadata(dataDirectory + "/metadata.csv", marketData);
+
+    loadBacktestData(dataDirectory + "/backtest.csv", marketData);
 
     validateMarketData(marketData);
 

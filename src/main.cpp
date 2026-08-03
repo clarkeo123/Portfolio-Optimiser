@@ -291,6 +291,43 @@ int main() {
             << std::setw(18) << marketPortfolio.sharpeRatio
             << '\n';
 
+        // backtest: how did this portfolio actually perform from the
+        // training end date up to today?
+
+        if (marketData.backtestAvailable) {
+            double optimisedForwardReturn =
+                calculatePortfolioForwardReturn(bestPortfolio, marketData);
+
+            double marketCapForwardReturn =
+                calculatePortfolioForwardReturn(marketPortfolio, marketData);
+
+            std::cout
+                << "\nBacktest: "
+                << marketData.backtestStartDate
+                << " to "
+                << marketData.backtestEndDate
+                << "\n=================================\n\n";
+
+            std::cout
+                << std::setw(28) << "Optimised portfolio"
+                << std::setw(12) << optimisedForwardReturn * 100.0 << "%\n";
+
+            std::cout
+                << std::setw(28) << "Market-cap-weighted benchmark"
+                << std::setw(12) << marketCapForwardReturn * 100.0 << "%\n";
+
+            std::cout
+                << std::setw(28) << "Actual FTSE 100 index"
+                << std::setw(12) << marketData.ftseForwardReturn * 100.0
+                << "%\n";
+        } else {
+            std::cout
+                << "\nNo backtest available - the data was generated "
+                   "with an end date of today. Rerun stockinfo.py with "
+                   "--end-date set to an earlier date to enable a "
+                   "backtest.\n";
+        }
+
         std::cout << "\nProgram completed successfully.\n";
     } catch (const std::exception& exception) {
         std::cerr

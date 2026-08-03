@@ -46,4 +46,13 @@ Portfolio buildMarketCapWeightedPortfolio(
     const MarketData& marketData
 );
 
+// calculates the total (simple) return a portfolio's stock holdings
+// would have produced from the training end date to today. Cash is
+// assumed to earn 0% over the period. Only meaningful when
+// MarketData::backtestAvailable is true.
+double calculatePortfolioForwardReturn(
+    const Portfolio& portfolio,
+    const MarketData& marketData
+);
+
 #endif

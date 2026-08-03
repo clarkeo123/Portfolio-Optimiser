@@ -81,7 +81,7 @@ def get_uk_1y_gilt_yield():
 FTSE100_INDEX = "^FTSE"
 
 
-def get_market_data(tickers: list[str], years: int = 5):
+def get_market_data(tickers: list[str], years: int = 5, end_date=None):
     # Returns:
     #   stock_prices
     #   stock_log_returns
@@ -89,7 +89,9 @@ def get_market_data(tickers: list[str], years: int = 5):
     #   start_date
     #   end_date
 
-    end_date = pd.Timestamp.today().normalize()
+    if end_date is None:
+        end_date = pd.Timestamp.today().normalize()
+
     start_date = end_date - pd.DateOffset(years=years)
 
     download_tickers = list(tickers) + [FTSE100_INDEX]
@@ -277,6 +279,67 @@ def calculate_covariance_matrix(
 
     return annualised_covariance
 
+def get_backtest_data(tickers, backtest_start, backtest_end):
+    """
+    Downloads prices for `tickers` plus the FTSE 100 index between
+    backtest_start and backtest_end, and returns the total (simple)
+    return each one produced over that window:
+
+        return = final_close / first_close - 1
+
+    Returns (stock_forward_returns: pd.Series, ftse_forward_return: float)
+    """
+    download_tickers = list(tickers) + [FTSE100_INDEX]
+
+    data = yf.download(
+        download_tickers,
+        start=backtest_start.strftime("%Y-%m-%d"),
+        end=(backtest_end + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+        interval="1d",
+        group_by="ticker",
+        auto_adjust=True,
+        threads=True,
+        progress=False,
+    )
+
+    forward_returns = {}
+
+    for ticker in tickers:
+        try:
+            close = data[ticker]["Close"].dropna()
+        except KeyError:
+            print(f"Warning: no backtest data found for {ticker}")
+            continue
+
+        if len(close) < 2:
+            print(f"Warning: insufficient backtest data for {ticker}")
+            continue
+
+        forward_returns[ticker] = close.iloc[-1] / close.iloc[0] - 1
+
+    try:
+        ftse_close = data[FTSE100_INDEX]["Close"].dropna()
+    except KeyError:
+        raise ValueError("Could not download FTSE 100 index backtest data.")
+
+    if len(ftse_close) < 2:
+        raise ValueError("Insufficient FTSE 100 index backtest data.")
+
+    ftse_forward_return = ftse_close.iloc[-1] / ftse_close.iloc[0] - 1
+
+    return (
+        pd.Series(forward_returns, name="ForwardReturn"),
+        ftse_forward_return
+    )
+
+
+def save_backtest(forward_returns: pd.Series, output_path: str):
+    backtest_df = forward_returns.rename("ForwardReturn").reset_index()
+
+    backtest_df.columns = ["YFinanceTicker", "ForwardReturn"]
+
+    backtest_df.to_csv(output_path, index=False)
+
 def save_assets(
     tickers_df, betas, expected_returns, market_cap_weights, output_path
 ):
@@ -316,35 +379,43 @@ def save_metadata(
     number_of_stocks,
     number_of_observations,
     output_path,
-    trading_days=252
+    trading_days=252,
+    backtest_start_date=None,
+    backtest_end_date=None,
+    ftse_forward_return=None
 ):
-    metadata = pd.DataFrame({
-        "Parameter": [
-            "RiskFreeRate",
-            "MarketReturn",
-            "StartDate",
-            "EndDate",
-            "Years",
-            "NumberOfStocks",
-            "NumberOfObservations",
-            "TradingDaysPerYear"
-        ],
-        "Value": [
-            risk_free_rate,
-            market_return,
-            start_date,
-            end_date,
-            years,
-            number_of_stocks,
-            number_of_observations,
-            trading_days
-        ]
-    })
+    parameters = [
+        "RiskFreeRate",
+        "MarketReturn",
+        "StartDate",
+        "EndDate",
+        "Years",
+        "NumberOfStocks",
+        "NumberOfObservations",
+        "TradingDaysPerYear"
+    ]
 
-    metadata.to_csv(
-        output_path,
-        index=False
-    )
+    values = [
+        risk_free_rate,
+        market_return,
+        start_date,
+        end_date,
+        years,
+        number_of_stocks,
+        number_of_observations,
+        trading_days
+    ]
+
+    # only present when a backtest period was actually generated
+    if backtest_start_date is not None:
+        parameters += [
+            "BacktestStartDate", "BacktestEndDate", "FTSEForwardReturn"
+        ]
+        values += [backtest_start_date, backtest_end_date, ftse_forward_return]
+
+    metadata = pd.DataFrame({"Parameter": parameters, "Value": values})
+
+    metadata.to_csv(output_path, index=False)
 
 def filter_stocks_by_data_quality(
     stock_log_returns,
@@ -396,13 +467,41 @@ def filter_stocks_by_data_quality(
 
 if __name__ == "__main__":
 
-    YEARS = 5
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(
+        description="Generate portfolio optimisation input data."
+    )
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        help=(
+            "Training data cutoff date (YYYY-MM-DD). Stock data used to "
+            "build the portfolio is drawn from before this date. Defaults "
+            "to today, in which case no backtest period is available."
+        ),
+    )
+    parser.add_argument(
+        "--years",
+        type=int,
+        default=5,
+        help="Length of the historical training window, in years.",
+    )
+    args = parser.parse_args()
+
+    TODAY = pd.Timestamp.today().normalize()
+
+    END_DATE = (
+        pd.Timestamp(args.end_date).normalize() if args.end_date else TODAY
+    )
+
+    YEARS = args.years
     TRADING_DAYS = 252
     OUTPUT_DIR = "portfolio_data"
 
-    import os
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
     # FTSE 100 constituents
     ftse_df = get_ftse100_tickers()
 
@@ -420,7 +519,7 @@ if __name__ == "__main__":
     # historical stock + FTSE 100 data
     (
         prices, stock_log_returns, market_log_returns, start_date, end_date
-    ) = get_market_data(tickers, years=YEARS)
+    ) = get_market_data(tickers, years=YEARS, end_date=END_DATE)
 
     # filters stocks based on historical data availability
     stock_log_returns = filter_stocks_by_data_quality(
@@ -501,6 +600,47 @@ if __name__ == "__main__":
         market_caps.loc[common_tickers]
     )
 
+    # backtest: how would this portfolio's stocks have performed from
+    # end_date up to today?
+    backtest_available = END_DATE < TODAY
+
+    forward_returns = None
+    ftse_forward_return = None
+
+    if backtest_available:
+        print(
+            f"\nRunning backtest from {END_DATE.date()} to {TODAY.date()}..."
+        )
+
+        forward_returns, ftse_forward_return = get_backtest_data(
+            common_tickers, END_DATE, TODAY
+        )
+
+        # some stocks may be missing backtest data (e.g. delisted or
+        # newly listed since end_date) - drop them everywhere consistently
+        common_tickers = [
+            ticker for ticker in common_tickers
+            if ticker in forward_returns.index
+        ]
+
+        stock_log_returns = stock_log_returns[common_tickers]
+        betas = betas[common_tickers]
+        expected_returns = expected_returns[common_tickers]
+        covariance = covariance.loc[common_tickers, common_tickers]
+        ftse_df = ftse_df[ftse_df["yfinance_ticker"].isin(common_tickers)]
+        market_cap_weights = market_cap_weights[common_tickers]
+        forward_returns = forward_returns[common_tickers]
+
+        print(
+            "FTSE 100 index return over backtest period: "
+            f"{ftse_forward_return:.2%}"
+        )
+    else:
+        print(
+            "\nNo backtest period available (end date is today) - pass "
+            "--end-date with an earlier date to enable a backtest."
+        )
+
     # saves data for C++
     save_assets(
         ftse_df,
@@ -509,7 +649,11 @@ if __name__ == "__main__":
         market_cap_weights,
         f"{OUTPUT_DIR}/assets.csv"
     )
+
     save_covariance(covariance, f"{OUTPUT_DIR}/covariance.csv")
+
+    if backtest_available:
+        save_backtest(forward_returns, f"{OUTPUT_DIR}/backtest.csv")
 
     save_metadata(
         risk_free_rate,
@@ -520,7 +664,12 @@ if __name__ == "__main__":
         len(common_tickers),
         len(stock_log_returns),
         f"{OUTPUT_DIR}/metadata.csv",
-        TRADING_DAYS
+        TRADING_DAYS,
+        backtest_start_date=END_DATE.date() if backtest_available else None,
+        backtest_end_date=TODAY.date() if backtest_available else None,
+        ftse_forward_return=(
+            ftse_forward_return if backtest_available else None
+        )
     )
 
     print()

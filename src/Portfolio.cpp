@@ -109,3 +109,32 @@ Portfolio buildMarketCapWeightedPortfolio(const MarketData& marketData) {
 
     return portfolio;
 }
+
+double calculatePortfolioForwardReturn(
+    const Portfolio& portfolio,
+    const MarketData& marketData
+) {
+    if (!marketData.backtestAvailable) {
+        throw std::runtime_error(
+            "No backtest data is available - regenerate portfolio_data "
+            "with an --end-date earlier than today."
+        );
+    }
+
+    if (portfolio.weights.size() != marketData.assets.size()) {
+        throw std::runtime_error(
+            "Number of portfolio weights does not match number of assets."
+        );
+    }
+
+    double forwardReturn = 0.0;
+
+    for (std::size_t i = 0; i < portfolio.weights.size(); ++i) {
+        forwardReturn +=
+            portfolio.weights[i] * marketData.assets[i].forwardReturn;
+    }
+
+    // cash is assumed to earn 0% over the backtest window - a
+    // simplification, since it isn't invested in either portfolio
+    return forwardReturn;
+}
