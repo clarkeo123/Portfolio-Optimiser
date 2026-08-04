@@ -68,6 +68,8 @@ private:
 
     ObjectiveRanges objectiveRanges;
 
+    int generationsWithoutImprovement = 0;
+
     Portfolio generateRandomPortfolio();
 
     void repairPortfolio(
@@ -91,6 +93,10 @@ private:
     ) const;
 
     void calculateObjectiveRanges();
+
+    double calculatePopulationDiversity(
+        const std::vector<Portfolio>& population
+    ) const;
 
     void saveHistory(
         const std::vector<std::string>& history

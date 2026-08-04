@@ -47,6 +47,9 @@ struct MarketData
     std::string backtestEndDate;
 
     double ftseForwardReturn = 0.0;
+
+    // total cash return over the backtest period
+    double backtestRiskFreeReturn = 0.0;
 };
 
 MarketData loadMarketData(

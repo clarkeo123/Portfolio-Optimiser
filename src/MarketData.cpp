@@ -206,6 +206,8 @@ void loadMetadata(const std::string& filename, MarketData& marketData) {
         } else if (parameter == "FTSEForwardReturn") {
             marketData.ftseForwardReturn = stringToDouble(value);
             marketData.backtestAvailable = true;
+        } else if (parameter == "BacktestRiskFreeReturn") {
+            marketData.backtestRiskFreeReturn = stringToDouble(value);
         }
     }
 }

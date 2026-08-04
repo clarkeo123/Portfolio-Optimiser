@@ -78,6 +78,158 @@ def get_uk_1y_gilt_yield():
  
     raise ValueError("No populated 1-year yield found in the sheet")
 
+SONIA_SERIES_CODE = "IUDSOIA"
+
+def get_sonia_data(start_date, end_date):
+    """
+    Download daily SONIA observations from the Bank of England.
+
+    Returns a DataFrame with:
+        Date
+        SONIA
+
+    SONIA is expressed as a percentage, e.g. 4.75 means 4.75%.
+    """
+    url = (
+        "https://www.bankofengland.co.uk/boeapps/database/"
+        "_iadb-fromshowcolumns.asp"
+    )
+
+    params = {
+        "csv.x": "yes",
+        "Datefrom": pd.Timestamp(start_date).strftime("%d/%b/%Y"),
+        "Dateto": pd.Timestamp(end_date).strftime("%d/%b/%Y"),
+        "SeriesCodes": SONIA_SERIES_CODE,
+        "CSVF": "TN",
+        "UsingCodes": "Y",
+        "VPD": "N",
+        "VFD": "N",
+    }
+
+    response = requests.get(
+        url,
+        params=params,
+        timeout=30,
+        headers=HEADERS
+    )
+
+    response.raise_for_status()
+
+    data = pd.read_csv(
+        io.StringIO(response.text)
+    )
+
+    if data.shape[1] < 2:
+        raise ValueError(
+            "Bank of England SONIA download returned no usable data."
+        )
+
+    data.columns = ["Date", "SONIA"]
+
+    data["Date"] = pd.to_datetime(
+        data["Date"],
+        dayfirst=True,
+        errors="coerce"
+    )
+
+    data["SONIA"] = pd.to_numeric(
+        data["SONIA"],
+        errors="coerce"
+    )
+
+    data = data.dropna(
+        subset=["Date", "SONIA"]
+    ).sort_values("Date")
+
+    if data.empty:
+        raise ValueError(
+            "No SONIA observations were returned by the Bank of England."
+        )
+
+    return data
+
+def calculate_backtest_risk_free_return(backtest_start, backtest_end):
+    """
+    Calculates the compounded cash return between two dates using
+    historical daily SONIA observations.
+
+    SONIA is an overnight rate. For each observation, the rate is
+    compounded over the number of calendar days until the next
+    SONIA observation.
+
+    ACT/365 day-count convention is used.
+    """
+
+    start_date = pd.Timestamp(backtest_start).normalize()
+    end_date = pd.Timestamp(backtest_end).normalize()
+
+    if end_date <= start_date:
+        raise ValueError(
+            "Backtest end date must be after backtest start date."
+        )
+
+    sonia = get_sonia_data(
+        start_date,
+        end_date
+    )
+
+    # We need a SONIA observation on or before the backtest start.
+    before_start = sonia[
+        sonia["Date"] <= start_date
+    ]
+
+    if before_start.empty:
+        raise ValueError(
+            "No SONIA observation exists on or before the backtest start date."
+        )
+
+    # Start with the most recent available SONIA observation
+    # on or before the backtest start.
+    current_rate = before_start.iloc[-1]["SONIA"]
+    current_date = start_date
+
+    growth_factor = 1.0
+
+    future_observations = sonia[
+        sonia["Date"] > start_date
+    ]
+
+    for _, row in future_observations.iterrows():
+
+        observation_date = row["Date"]
+
+        if observation_date > end_date:
+            break
+
+        days = (
+            observation_date - current_date
+        ).days
+
+        if days > 0:
+            growth_factor *= (
+                1.0
+                + (current_rate / 100.0)
+                * (days / 365.0)
+            )
+
+        current_date = observation_date
+        current_rate = row["SONIA"]
+
+    # Accrue from the final SONIA observation through the
+    # requested backtest end date.
+    remaining_days = (
+        end_date - current_date
+    ).days
+
+    if remaining_days > 0:
+        growth_factor *= (
+            1.0
+            + (current_rate / 100.0)
+            * (remaining_days / 365.0)
+        )
+
+    return growth_factor - 1.0
+
 FTSE100_INDEX = "^FTSE"
 
 
@@ -382,7 +534,8 @@ def save_metadata(
     trading_days=252,
     backtest_start_date=None,
     backtest_end_date=None,
-    ftse_forward_return=None
+    ftse_forward_return=None,
+    backtest_risk_free_return=None
 ):
     parameters = [
         "RiskFreeRate",
@@ -409,9 +562,18 @@ def save_metadata(
     # only present when a backtest period was actually generated
     if backtest_start_date is not None:
         parameters += [
-            "BacktestStartDate", "BacktestEndDate", "FTSEForwardReturn"
+            "BacktestStartDate",
+            "BacktestEndDate",
+            "FTSEForwardReturn",
+            "BacktestRiskFreeReturn"
         ]
-        values += [backtest_start_date, backtest_end_date, ftse_forward_return]
+
+        values += [
+            backtest_start_date,
+            backtest_end_date,
+            ftse_forward_return,
+            backtest_risk_free_return
+        ]
 
     metadata = pd.DataFrame({"Parameter": parameters, "Value": values})
 
@@ -606,6 +768,7 @@ if __name__ == "__main__":
 
     forward_returns = None
     ftse_forward_return = None
+    backtest_risk_free_return = None
 
     if backtest_available:
         print(
@@ -614,6 +777,16 @@ if __name__ == "__main__":
 
         forward_returns, ftse_forward_return = get_backtest_data(
             common_tickers, END_DATE, TODAY
+        )
+
+        backtest_risk_free_return = calculate_backtest_risk_free_return(
+            END_DATE,
+            TODAY
+        )
+
+        print(
+            "Cash/risk-free return over backtest period: "
+            f"{backtest_risk_free_return:.2%}"
         )
 
         # some stocks may be missing backtest data (e.g. delisted or
@@ -669,6 +842,9 @@ if __name__ == "__main__":
         backtest_end_date=TODAY.date() if backtest_available else None,
         ftse_forward_return=(
             ftse_forward_return if backtest_available else None
+        ),
+        backtest_risk_free_return=(
+            backtest_risk_free_return if backtest_available else None
         )
     )
 

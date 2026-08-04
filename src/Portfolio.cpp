@@ -134,7 +134,8 @@ double calculatePortfolioForwardReturn(
             portfolio.weights[i] * marketData.assets[i].forwardReturn;
     }
 
-    // cash is assumed to earn 0% over the backtest window - a
-    // simplification, since it isn't invested in either portfolio
+    forwardReturn +=
+        portfolio.cashWeight * marketData.backtestRiskFreeReturn;
+
     return forwardReturn;
 }

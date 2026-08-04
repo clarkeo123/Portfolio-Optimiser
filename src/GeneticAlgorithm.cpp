@@ -287,6 +287,46 @@ void GeneticAlgorithm::calculateObjectiveRanges() {
         << "\n";
 }
 
+double GeneticAlgorithm::calculatePopulationDiversity(
+    const std::vector<Portfolio>& population
+) const {
+    if (population.empty()) {
+        return 0.0;
+    }
+
+    const std::size_t n = marketData.assets.size();
+
+    std::vector<double> averageWeights(n, 0.0);
+
+    for (const Portfolio& portfolio : population) {
+        for (std::size_t i = 0; i < n; ++i) {
+            averageWeights[i] += portfolio.weights[i];
+        }
+    }
+
+    for (double& weight : averageWeights) {
+        weight /= static_cast<double>(population.size());
+    }
+
+    double totalDistance = 0.0;
+
+    for (const Portfolio& portfolio : population) {
+        double squaredDistance = 0.0;
+
+        for (std::size_t i = 0; i < n; ++i) {
+            double difference =
+                portfolio.weights[i] - averageWeights[i];
+
+            squaredDistance += difference * difference;
+        }
+
+        totalDistance += std::sqrt(squaredDistance);
+    }
+
+    return totalDistance /
+           static_cast<double>(population.size());
+}
+
 double GeneticAlgorithm::calculateNormalisedReturn(
     double expectedReturn
 ) const {
@@ -495,7 +535,9 @@ Portfolio GeneticAlgorithm::run(){
         "ExpectedReturn,"
         "Volatility,"
         "SharpeRatio,"
-        "CashWeight"
+        "CashWeight,"
+        "PopulationDiversity,"
+        "GenerationsWithoutImprovement"
     );
 
     // evolution
@@ -527,15 +569,17 @@ Portfolio GeneticAlgorithm::run(){
 
         double generationBestFitness = generationBest.fitness;
 
+        double populationDiversity = calculatePopulationDiversity(population);
 
-        if (generationBestFitness >
-            bestFitness)
+        if (generationBestFitness > bestFitness)
         {
-            bestPortfolio =
-                generationBest;
+            bestPortfolio = generationBest;
 
-            bestFitness =
-                generationBestFitness;
+            bestFitness = generationBestFitness;
+
+            generationsWithoutImprovement = 0;
+        } else {
+            ++generationsWithoutImprovement;
         }
 
 
@@ -553,7 +597,11 @@ Portfolio GeneticAlgorithm::run(){
             << ","
             << bestPortfolio.sharpeRatio
             << ","
-            << bestPortfolio.cashWeight;
+            << bestPortfolio.cashWeight
+            << ","
+            << populationDiversity
+            << ","
+            << generationsWithoutImprovement;
 
         history.push_back(historyLine.str());
 
