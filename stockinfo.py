@@ -12,8 +12,6 @@ import openpyxl
 WIKI_URL = "https://en.wikipedia.org/wiki/FTSE_100_Index"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"}
 
-ZIP_URL = "https://www.bankofengland.co.uk/-/media/boe/files/statistics/yield-curves/latest-yield-curve-data.zip"
-
 def get_ftse100_tickers():
     # returns a DataFrame with columns: company, ticker, yfinance_ticker from 
     # FTSE 100 constituents table on Wikipedia
@@ -39,44 +37,6 @@ def get_ftse100_tickers():
  
     const_table["yfinance_ticker"] = const_table["ticker"].apply(to_yfinance)
     return const_table[["company", "ticker", "yfinance_ticker"]]
-
-def download_nominal_workbook(url: str = ZIP_URL):
-    resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-    resp.raise_for_status()
-    zf = zipfile.ZipFile(io.BytesIO(resp.content))
-
-    with zf.open("GLC Nominal daily data current month.xlsx") as f:
-        data = f.read()
- 
-    return openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
- 
-def get_uk_1y_gilt_yield():
-    # returns (date, yield_percent) for the most recent 1-year (12-month) 
-    # point on the BoE's UK nominal gilt spot curve.
-
-    wb = download_nominal_workbook()
-    ws = wb["4. spot curve"]
- 
-    rows = list(ws.iter_rows(values_only=True))
-
-    months_row = next(r for r in rows if r and r[0] == "years:")
-    target_col = None
-    for idx, val in enumerate(months_row):
-        if val == 1:
-            target_col = idx
-            break
-    if target_col is None:
-        raise ValueError("Could not find a 1 year column in the header row")
- 
-    for row in reversed(rows):
-        date_val = row[0]
-        if date_val is None or not hasattr(date_val, "year"):
-            continue
-        yield_val = row[target_col]
-        if isinstance(yield_val, (int, float)):
-            return date_val.date(), yield_val
- 
-    raise ValueError("No populated 1-year yield found in the sheet")
 
 SONIA_SERIES_CODE = "IUDSOIA"
 
@@ -229,6 +189,10 @@ def calculate_backtest_risk_free_return(backtest_start, backtest_end):
         )
 
     return growth_factor - 1.0
+
+def annualise_return(total_return, start_date, end_date):
+    years = (pd.Timestamp(end_date) - pd.Timestamp(start_date)).days / 365.0
+    return (1.0 + total_return) ** (1.0 / years) - 1.0
 
 FTSE100_INDEX = "^FTSE"
 
@@ -389,20 +353,46 @@ def calculate_capm_returns(betas, risk_free_rate, market_return):
 
     return expected_returns
 
-def get_market_caps(tickers) -> pd.Series:
+def get_market_caps(tickers, target_date) -> pd.Series:
     # returns a series of market capitalisations indexed by yfinance
+
+    print(target_date)
 
     market_caps = {}
 
     for ticker in tickers:
         try:
-            market_cap = yf.Ticker(ticker).fast_info["market_cap"]
+            df_hist = yf.Ticker(ticker).history(start=target_date)
+            close_price = df_hist["Close"].iloc[0]
+
+            #print(f"Close price for {ticker}: {close_price}")
+
+            # gets shares outstanding from balance sheet / financials
+            shares = yf.Ticker(ticker).get_shares_full(start=target_date)
+            if shares is not None and not shares.empty:
+                share_count = shares.iloc[-1]
+                #print(f"Shares outstanding for {ticker}: {share_count}")
+            else:
+                print(
+                    f"Warning: no shares outstanding data found for {ticker} " 
+                    f"on {target_date}, using current info instead."
+                )
+                # falls back to current info if historical count isn't indexed
+                share_count = yf.Ticker(ticker).info.get("sharesOutstanding")
+
+            market_cap = close_price * share_count
         except Exception:
             market_cap = None
 
         if not market_cap or market_cap <= 0:
-            print(f"Warning: no market cap found for {ticker}")
-            continue
+            print(
+                f"Warning: no market cap found for {ticker} on "
+                f"{target_date}, using current market cap instead."
+            )
+            market_cap = yf.Ticker(ticker).fast_info["market_cap"]
+            if not market_cap or market_cap <= 0:
+                print(f"Warning: no market cap found for {ticker}")
+                continue
 
         market_caps[ticker] = market_cap
 
@@ -671,17 +661,15 @@ if __name__ == "__main__":
 
     print(f"Found {len(tickers)} FTSE 100 constituents.")
 
-    # risk-free rate
-    gilt_date, yield_pct = get_uk_1y_gilt_yield()
-
-    risk_free_rate = yield_pct / 100.0
-
-    print(f"UK 1-year gilt yield ({gilt_date}): {risk_free_rate:.4%}")
-
     # historical stock + FTSE 100 data
     (
         prices, stock_log_returns, market_log_returns, start_date, end_date
     ) = get_market_data(tickers, years=YEARS, end_date=END_DATE)
+
+    training_cash_return = calculate_backtest_risk_free_return(start_date, end_date)
+    risk_free_rate = annualise_return(training_cash_return, start_date, end_date)
+
+    print(f"Historical SONIA-derived risk-free rate ({start_date.date()} to {end_date.date()}): {risk_free_rate:.4%}")
 
     # filters stocks based on historical data availability
     stock_log_returns = filter_stocks_by_data_quality(
@@ -744,7 +732,7 @@ if __name__ == "__main__":
     ftse_df = ftse_df[ftse_df["yfinance_ticker"].isin(common_tickers)]
 
     # market capitalisations, for the market-cap-weighted benchmark portfolio
-    market_caps = get_market_caps(common_tickers)
+    market_caps = get_market_caps(common_tickers, args.end_date)
 
     # keep only stocks we could get a market cap for, preserving the
     # existing order explicitly rather than relying on Index.intersection
