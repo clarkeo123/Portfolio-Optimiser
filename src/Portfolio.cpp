@@ -139,3 +139,118 @@ double calculatePortfolioForwardReturn(
 
     return forwardReturn;
 }
+
+namespace {
+
+// sample stdev of log returns of a value series, annualised
+double annualisedVolatilityFromSeries(
+    const std::vector<double>& value,
+    int tradingDaysPerYear
+) {
+    const std::size_t numberOfReturns = value.size() - 1;
+
+    double mean = 0.0;
+    std::vector<double> logReturns(numberOfReturns);
+
+    for (std::size_t t = 0; t < numberOfReturns; ++t) {
+        logReturns[t] = std::log(value[t + 1] / value[t]);
+        mean += logReturns[t];
+    }
+    mean /= static_cast<double>(numberOfReturns);
+
+    double variance = 0.0;
+    for (double r : logReturns) { variance += (r - mean) * (r - mean); }
+    variance /= static_cast<double>(numberOfReturns - 1);
+
+    return std::sqrt(variance) * std::sqrt(static_cast<double>(tradingDaysPerYear));
+}
+
+} // namespace
+
+std::vector<double> calculateBacktestValueSeries(
+    const Portfolio& portfolio,
+    const MarketData& marketData
+) {
+    if (!marketData.backtestAvailable) {
+        throw std::runtime_error("No backtest data is available.");
+    }
+
+    const std::size_t numberOfDates = marketData.backtestPrices.rows();
+    const std::size_t n = marketData.assets.size();
+
+    // approximates the cash leg's daily growth by spreading the known
+    // total backtest cash return evenly (in log terms) across the
+    // window - there's no daily SONIA path loaded, only the total
+    double dailyCashLogGrowth =
+        std::log(1.0 + marketData.backtestRiskFreeReturn)
+        / static_cast<double>(numberOfDates - 1);
+
+    std::vector<double> value(numberOfDates, 0.0);
+
+    for (std::size_t t = 0; t < numberOfDates; ++t) {
+        double stockValue = 0.0;
+
+        for (std::size_t i = 0; i < n; ++i) {
+            stockValue +=
+                portfolio.weights[i]
+                * (marketData.backtestPrices(t, i) / marketData.backtestPrices(0, i));
+        }
+
+        value[t] = stockValue + portfolio.cashWeight * std::exp(dailyCashLogGrowth * t);
+    }
+
+    return value;
+}
+
+double calculateBacktestVolatility(
+    const Portfolio& portfolio,
+    const MarketData& marketData
+) {
+    return annualisedVolatilityFromSeries(
+        calculateBacktestValueSeries(portfolio, marketData),
+        marketData.tradingDaysPerYear
+    );
+}
+
+double calculateBacktestSharpeRatio(
+    const Portfolio& portfolio,
+    const MarketData& marketData
+) {
+    double volatility = calculateBacktestVolatility(portfolio, marketData);
+    if (volatility <= 0.0) { return 0.0; }
+
+    double years =
+        static_cast<double>(marketData.backtestPrices.rows() - 1)
+        / static_cast<double>(marketData.tradingDaysPerYear);
+
+    double totalReturn = calculatePortfolioForwardReturn(portfolio, marketData);
+    double annualisedReturn = std::pow(1.0 + totalReturn, 1.0 / years) - 1.0;
+    double annualisedRiskFreeRate =
+        std::pow(1.0 + marketData.backtestRiskFreeReturn, 1.0 / years) - 1.0;
+
+    return (annualisedReturn - annualisedRiskFreeRate) / volatility;
+}
+
+double calculateFTSEBacktestVolatility(const MarketData& marketData) {
+    const auto& p = marketData.ftseBacktestPrices;
+    std::vector<double> value(p.size());
+    for (int t = 0; t < p.size(); ++t) { value[t] = p(t) / p(0); }
+
+    return annualisedVolatilityFromSeries(value, marketData.tradingDaysPerYear);
+}
+
+double calculateFTSEBacktestSharpeRatio(const MarketData& marketData) {
+    double volatility = calculateFTSEBacktestVolatility(marketData);
+    if (volatility <= 0.0) { return 0.0; }
+
+    double years =
+        static_cast<double>(marketData.ftseBacktestPrices.size() - 1)
+        / static_cast<double>(marketData.tradingDaysPerYear);
+
+    double annualisedReturn =
+        std::pow(1.0 + marketData.ftseForwardReturn, 1.0 / years) - 1.0;
+    double annualisedRiskFreeRate =
+        std::pow(1.0 + marketData.backtestRiskFreeReturn, 1.0 / years) - 1.0;
+
+    return (annualisedReturn - annualisedRiskFreeRate) / volatility;
+}

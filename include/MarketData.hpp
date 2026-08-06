@@ -50,6 +50,11 @@ struct MarketData
 
     // total cash return over the backtest period
     double backtestRiskFreeReturn = 0.0;
+
+    // daily closing prices over the backtest period.
+    // backtestPrices(t, i) = close of assets[i] on backtestDates[t]
+    Eigen::MatrixXd backtestPrices;
+    Eigen::VectorXd ftseBacktestPrices;
 };
 
 MarketData loadMarketData(

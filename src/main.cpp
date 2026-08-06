@@ -320,6 +320,28 @@ int main() {
                 << std::setw(28) << "Actual FTSE 100 index"
                 << std::setw(12) << marketData.ftseForwardReturn * 100.0
                 << "%\n";
+
+            std::cout
+                << "\nBacktest volatility & Sharpe\n"
+                << "=============================\n\n";
+
+            std::cout
+                << std::setw(28) << "Optimised portfolio"
+                << std::setw(12) << calculateBacktestVolatility(bestPortfolio, marketData) * 100.0 << "%"
+                << std::setw(10) << calculateBacktestSharpeRatio(bestPortfolio, marketData)
+                << '\n';
+
+            std::cout
+                << std::setw(28) << "Market-cap-weighted benchmark"
+                << std::setw(12) << calculateBacktestVolatility(marketPortfolio, marketData) * 100.0 << "%"
+                << std::setw(10) << calculateBacktestSharpeRatio(marketPortfolio, marketData)
+                << '\n';
+
+            std::cout
+                << std::setw(28) << "Actual FTSE 100 index"
+                << std::setw(12) << calculateFTSEBacktestVolatility(marketData) * 100.0 << "%"
+                << std::setw(10) << calculateFTSEBacktestSharpeRatio(marketData)
+                << '\n';
         } else {
             std::cout
                 << "\nNo backtest available - the data was generated "

@@ -262,6 +262,85 @@ void loadBacktestData(const std::string& filename, MarketData& marketData) {
     }
 }
 
+// loads backtest_prices.csv (optional - only present alongside a
+// backtest period). Ticker columns are matched by name rather than
+// position, same approach as loadBacktestData.
+void loadBacktestPrices(const std::string& filename, MarketData& marketData) {
+    if (!marketData.backtestAvailable) { return; }
+
+    std::ifstream file(filename);
+
+    if (!file.is_open()) {
+        std::cerr
+            << "Warning: could not open " << filename
+            << ". Backtest volatility/Sharpe will be unavailable.\n";
+        marketData.backtestAvailable = false;
+        return;
+    }
+
+    std::string line;
+    std::getline(file, line);
+
+    std::vector<std::string> headers = splitCSVLine(line);
+
+    std::map<std::string, std::size_t> columnByTicker;
+    for (std::size_t col = 1; col < headers.size(); ++col) {
+        columnByTicker[headers[col]] = col;
+    }
+
+    const std::size_t n = marketData.assets.size();
+
+    std::vector<std::size_t> assetColumns(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        auto it = columnByTicker.find(marketData.assets[i].yfinanceTicker);
+        if (it == columnByTicker.end()) {
+            throw std::runtime_error(
+                "No backtest price series found for " + marketData.assets[i].ticker
+            );
+        }
+        assetColumns[i] = it->second;
+    }
+
+    auto ftseIt = columnByTicker.find("^FTSE");
+    if (ftseIt == columnByTicker.end()) {
+        throw std::runtime_error("No FTSE 100 column in backtest prices file.");
+    }
+    std::size_t ftseColumn = ftseIt->second;
+
+    std::vector<std::vector<double>> rows;
+    std::vector<double> ftseRows;
+
+    while (std::getline(file, line)) {
+        if (line.empty()) { continue; }
+
+        std::vector<std::string> values = splitCSVLine(line);
+
+        std::vector<double> row(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            row[i] = stringToDouble(values[assetColumns[i]]);
+        }
+        rows.push_back(row);
+
+        ftseRows.push_back(stringToDouble(values[ftseColumn]));
+    }
+
+    const std::size_t numberOfDates = rows.size();
+
+    if (numberOfDates < 2) {
+        throw std::runtime_error("Not enough dates in backtest prices file.");
+    }
+
+    marketData.backtestPrices = Eigen::MatrixXd(numberOfDates, n);
+    marketData.ftseBacktestPrices = Eigen::VectorXd(numberOfDates);
+
+    for (std::size_t t = 0; t < numberOfDates; ++t) {
+        for (std::size_t i = 0; i < n; ++i) {
+            marketData.backtestPrices(t, i) = rows[t][i];
+        }
+        marketData.ftseBacktestPrices(t) = ftseRows[t];
+    }
+}
+
 // validates data
 void validateMarketData(const MarketData& marketData) {
     const std::size_t numberOfAssets = marketData.assets.size();
@@ -302,6 +381,8 @@ MarketData loadMarketData(const std::string& dataDirectory) {
     loadMetadata(dataDirectory + "/metadata.csv", marketData);
 
     loadBacktestData(dataDirectory + "/backtest.csv", marketData);
+
+    loadBacktestPrices(dataDirectory + "/backtest_prices.csv", marketData);
 
     validateMarketData(marketData);
 

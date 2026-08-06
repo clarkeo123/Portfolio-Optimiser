@@ -445,6 +445,7 @@ def get_backtest_data(tickers, backtest_start, backtest_end):
     )
 
     forward_returns = {}
+    closes = {}
 
     for ticker in tickers:
         try:
@@ -458,6 +459,7 @@ def get_backtest_data(tickers, backtest_start, backtest_end):
             continue
 
         forward_returns[ticker] = close.iloc[-1] / close.iloc[0] - 1
+        closes[ticker] = close
 
     try:
         ftse_close = data[FTSE100_INDEX]["Close"].dropna()
@@ -468,10 +470,14 @@ def get_backtest_data(tickers, backtest_start, backtest_end):
         raise ValueError("Insufficient FTSE 100 index backtest data.")
 
     ftse_forward_return = ftse_close.iloc[-1] / ftse_close.iloc[0] - 1
+    closes[FTSE100_INDEX] = ftse_close
+
+    backtest_prices = pd.DataFrame(closes).dropna()
 
     return (
         pd.Series(forward_returns, name="ForwardReturn"),
-        ftse_forward_return
+        ftse_forward_return,
+        backtest_prices
     )
 
 
@@ -481,6 +487,9 @@ def save_backtest(forward_returns: pd.Series, output_path: str):
     backtest_df.columns = ["YFinanceTicker", "ForwardReturn"]
 
     backtest_df.to_csv(output_path, index=False)
+
+def save_backtest_prices(backtest_prices: pd.DataFrame, output_path: str):
+    backtest_prices.to_csv(output_path, index_label="Date")
 
 def save_assets(
     tickers_df, betas, expected_returns, market_cap_weights, output_path
@@ -763,7 +772,7 @@ if __name__ == "__main__":
             f"\nRunning backtest from {END_DATE.date()} to {TODAY.date()}..."
         )
 
-        forward_returns, ftse_forward_return = get_backtest_data(
+        forward_returns, ftse_forward_return, backtest_prices = get_backtest_data(
             common_tickers, END_DATE, TODAY
         )
 
@@ -815,6 +824,8 @@ if __name__ == "__main__":
 
     if backtest_available:
         save_backtest(forward_returns, f"{OUTPUT_DIR}/backtest.csv")
+
+        save_backtest_prices(backtest_prices, f"{OUTPUT_DIR}/backtest_prices.csv")
 
     save_metadata(
         risk_free_rate,
