@@ -77,4 +77,12 @@ double calculateFTSEBacktestVolatility(const MarketData& marketData);
 
 double calculateFTSEBacktestSharpeRatio(const MarketData& marketData);
 
+// portfolio value path over the training period, rebased to 1.0 at the
+// start. Weights are only known once training completes, so this is a
+// retrospective view
+std::vector<double> calculateTrainingValueSeries(
+    const Portfolio& portfolio,
+    const MarketData& marketData
+);
+
 #endif

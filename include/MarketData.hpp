@@ -55,6 +55,12 @@ struct MarketData
     // backtestPrices(t, i) = close of assets[i] on backtestDates[t]
     Eigen::MatrixXd backtestPrices;
     Eigen::VectorXd ftseBacktestPrices;
+
+    std::vector<std::string> trainingDates;
+    Eigen::MatrixXd trainingPrices;
+    Eigen::VectorXd trainingFtsePrices;
+
+    std::vector<std::string> backtestDates;
 };
 
 MarketData loadMarketData(

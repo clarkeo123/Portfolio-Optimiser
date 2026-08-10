@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <cmath>
+#include <fstream>
 
 #include "MarketData.hpp"
 #include "Portfolio.hpp"
@@ -25,7 +26,7 @@ int main() {
         std::cout
             << "Stocks loaded: "
             << n
-            << '\n';
+            << "\n";
 
         std::cout
             << "Historical period: "
@@ -35,7 +36,7 @@ int main() {
         std::cout
             << "Observations: "
             << marketData.numberOfObservations
-            << '\n';
+            << "\n";
 
         std::cout
             << "Risk-free rate: "
@@ -138,12 +139,12 @@ int main() {
         std::cout
             << "Population: "
             << settings.populationSize
-            << '\n';
+            << "\n";
 
         std::cout
             << "Generations: "
             << settings.generations
-            << '\n';
+            << "\n";
 
         std::cout 
             << "Random seed: "
@@ -163,12 +164,12 @@ int main() {
         std::cout
             << "Return objective weight: "
             << settings.returnWeight
-            << '\n';
+            << "\n";
 
         std::cout
             << "Volatility objective weight: "
             << settings.volatilityWeight
-            << '\n';
+            << "\n";
 
         std::cout
             << "Sharpe objective weight: "
@@ -185,34 +186,19 @@ int main() {
 
         std::cout
             << "\nBest portfolio found\n"
-            << "====================\n\n";
-
-        std::cout
-            << "Expected return: "
-            << bestPortfolio.expectedReturn * 100.0
-            << "%\n";
-
-        std::cout
-            << "Volatility:       "
-            << bestPortfolio.volatility * 100.0
-            << "%\n";
-
-        std::cout
-            << "Sharpe ratio:     "
-            << bestPortfolio.sharpeRatio
-            << '\n';
-
-        std::cout
-            << "Cash:             "
-            << bestPortfolio.cashWeight
-                * 100.0
-            << "%\n";
+            << "======================================================\n\n";
 
         // displays stock positions
 
         std::cout
-            << "Portfolio holdings\n"
-            << "------------------\n";
+            << "Stock holdings\n"
+            << "------------------------------------------------------\n";
+
+        std::cout
+            << std::setw(6) << "Ticker"
+            << std::setw(36) << "Company"
+            << std::setw(12) << "Weight"
+            << "\n";
 
         for (std::size_t i = 0; i < marketData.assets.size(); ++i) {
             double weight =bestPortfolio.weights[i];
@@ -224,72 +210,61 @@ int main() {
             if (std::abs(weight) > 0.0001)
             {
                 std::cout
-                    << std::setw(8)
+                    << std::setw(6)
                     << marketData.assets[i].ticker
                     << "  "
-                    << std::setw(12)
+                    << std::setw(34)
                     << marketData.assets[i].company
                     << "  "
-                    << std::fixed
+                    << std::setw(9)
                     << std::setprecision(4)
                     << weight * 100.0
                     << "%\n";
             }
         }
 
+        std::cout
+            << "\nOther holdings\n"
+            << "------------------------------------------------------\n";
+        std::cout
+            << std::setw(6) << "Cash"
+            << std::setw(47) << bestPortfolio.cashWeight * 100.0
+            << "%\n";
+
         // market-cap-weighted benchmark (effectively the FTSE 100 index)
 
         Portfolio marketPortfolio =
             buildMarketCapWeightedPortfolio(marketData);
 
-        std::cout
-            << "\nMarket-cap-weighted benchmark\n"
-            << "==============================\n\n";
-
-        std::cout
-            << "Expected return: "
-            << marketPortfolio.expectedReturn * 100.0
-            << "%\n";
-
-        std::cout
-            << "Volatility:       "
-            << marketPortfolio.volatility * 100.0
-            << "%\n";
-
-        std::cout
-            << "Sharpe ratio:     "
-            << marketPortfolio.sharpeRatio
-            << '\n';
-
         // side-by-side comparison
 
         std::cout
-            << "\nOptimised portfolio vs. benchmark\n"
-            << "==================================\n\n";
+            << "\nOptimised portfolio vs. market-cap weighted benchmark\n"
+            << "======================================================\n\n";
 
         std::cout
-            << std::setw(20) << "Metric"
-            << std::setw(18) << "Optimised"
-            << std::setw(18) << "Benchmark"
-            << '\n';
+            << std::setw(15) << "Metric"
+            << std::setw(13) << "Optimised"
+            << std::setw(13) << "Benchmark"
+            << "\n";
 
         std::cout
-            << std::setw(20) << "Expected return"
-            << std::setw(17) << bestPortfolio.expectedReturn * 100.0 << "%"
-            << std::setw(17) << marketPortfolio.expectedReturn * 100.0 << "%"
-            << '\n';
+            << std::setw(15) << "Expected return"
+            << std::setw(12) << bestPortfolio.expectedReturn * 100.0 << "%"
+            << std::setw(12) << marketPortfolio.expectedReturn * 100.0 << "%"
+            << "\n";
 
         std::cout
-            << std::setw(20) << "Volatility"
-            << std::setw(17) << bestPortfolio.volatility * 100.0 << "%"
-            << std::setw(17) << marketPortfolio.volatility * 100.0 << "%"
-            << '\n';
+            << std::setw(15) << "Volatility"
+            << std::setw(12) << bestPortfolio.volatility * 100.0 << "%"
+            << std::setw(12) << marketPortfolio.volatility * 100.0 << "%"
+            << "\n";
 
         std::cout
-            << std::setw(20) << "Sharpe ratio"
-            << std::setw(18) << bestPortfolio.sharpeRatio
-            << std::setw(18) << marketPortfolio.sharpeRatio
-            << '\n';
+            << std::setw(15) << "Sharpe ratio"
+            << std::setw(13) << bestPortfolio.sharpeRatio
+            << std::setw(13) << marketPortfolio.sharpeRatio
+            << "\n";
 
         // backtest: how did this portfolio actually perform from the
         // training end date up to today?
@@ -306,42 +281,92 @@ int main() {
                 << marketData.backtestStartDate
                 << " to "
                 << marketData.backtestEndDate
-                << "\n=================================\n\n";
+                << "\n======================================================\n\n";
 
             std::cout
-                << std::setw(28) << "Optimised portfolio"
-                << std::setw(12) << optimisedForwardReturn * 100.0 << "%\n";
+                << std::setw(15) << "Metric"
+                << std::setw(13) << "Optimised"
+                << std::setw(13) << "Benchmark"
+                << std::setw(13) << "FTSE 100"
+                << "\n";
 
             std::cout
-                << std::setw(28) << "Market-cap-weighted benchmark"
-                << std::setw(12) << marketCapForwardReturn * 100.0 << "%\n";
+                << std::setw(15) << "Return"
+                << std::setw(12) << optimisedForwardReturn * 100.0 << "%"
+                << std::setw(12) << marketCapForwardReturn * 100.0 << "%"
+                << std::setw(12) << marketData.ftseForwardReturn * 100.0 << "%"
+                << "\n";
 
             std::cout
-                << std::setw(28) << "Actual FTSE 100 index"
-                << std::setw(12) << marketData.ftseForwardReturn * 100.0
-                << "%\n";
-
-            std::cout
-                << "\nBacktest volatility & Sharpe\n"
-                << "=============================\n\n";
-
-            std::cout
-                << std::setw(28) << "Optimised portfolio"
+                << std::setw(15) << "Volatility"
                 << std::setw(12) << calculateBacktestVolatility(bestPortfolio, marketData) * 100.0 << "%"
-                << std::setw(10) << calculateBacktestSharpeRatio(bestPortfolio, marketData)
-                << '\n';
-
-            std::cout
-                << std::setw(28) << "Market-cap-weighted benchmark"
                 << std::setw(12) << calculateBacktestVolatility(marketPortfolio, marketData) * 100.0 << "%"
-                << std::setw(10) << calculateBacktestSharpeRatio(marketPortfolio, marketData)
-                << '\n';
+                << std::setw(12) << calculateFTSEBacktestVolatility(marketData) * 100.0 << "%"
+                << "\n";
 
             std::cout
-                << std::setw(28) << "Actual FTSE 100 index"
-                << std::setw(12) << calculateFTSEBacktestVolatility(marketData) * 100.0 << "%"
-                << std::setw(10) << calculateFTSEBacktestSharpeRatio(marketData)
-                << '\n';
+                << std::setw(15) << "Sharpe ratio"
+                << std::setw(13) << calculateBacktestSharpeRatio(bestPortfolio, marketData)
+                << std::setw(13) << calculateBacktestSharpeRatio(marketPortfolio, marketData)
+                << std::setw(13) << calculateFTSEBacktestSharpeRatio(marketData)
+                << "\n";
+
+            std::vector<double> trainOptimised = calculateTrainingValueSeries(bestPortfolio, marketData);
+            std::vector<double> trainMarketCap = calculateTrainingValueSeries(marketPortfolio, marketData);
+
+            std::vector<double> trainFtse(marketData.trainingFtsePrices.size());
+            for (int t = 0; t < marketData.trainingFtsePrices.size(); ++t) {
+                trainFtse[t] = marketData.trainingFtsePrices(t) / marketData.trainingFtsePrices(0);
+            }
+
+            std::vector<double> backtestOptimised = calculateBacktestValueSeries(bestPortfolio, marketData);
+            std::vector<double> backtestMarketCap = calculateBacktestValueSeries(marketPortfolio, marketData);
+
+            std::vector<double> backtestFtse(marketData.ftseBacktestPrices.size());
+            for (int t = 0; t < marketData.ftseBacktestPrices.size(); ++t) {
+                backtestFtse[t] = marketData.ftseBacktestPrices(t) / marketData.ftseBacktestPrices(0);
+            }
+
+            std::ofstream backtestOut("portfolio_data/backtest_timeseries.csv");
+            backtestOut << "Date,OptimisedPortfolio,MarketCapBenchmark,FTSE100\n";
+
+            for (std::size_t t = 0; t < marketData.backtestDates.size(); ++t) {
+                backtestOut << marketData.backtestDates[t] << ","
+                    << backtestOptimised[t] << ","
+                    << backtestMarketCap[t] << ","
+                    << backtestFtse[t] << "\n";
+            }
+
+            backtestOut.close();
+
+            std::cout << "\nWrote portfolio_data/backtest_timeseries.csv\n";
+
+            std::ofstream out("portfolio_data/performance_timeseries.csv");
+            out << "Date,Period,OptimisedPortfolio,MarketCapBenchmark,FTSE100\n";
+
+            for (std::size_t t = 0; t < marketData.trainingDates.size(); ++t) {
+                out << marketData.trainingDates[t] << ",Training,"
+                    << trainOptimised[t] << "," << trainMarketCap[t] 
+                    << "," << trainFtse[t] << "\n";
+            }
+
+            // rebases the backtest segment onto where training left off, so the
+            // plotted line is continuous across the boundary
+            double optimisedScale = trainOptimised.back();
+            double marketCapScale = trainMarketCap.back();
+            double ftseScale = trainFtse.back();
+
+            for (std::size_t t = 0; t < marketData.backtestDates.size(); ++t) {
+                out << marketData.backtestDates[t] << ",Backtest,"
+                    << optimisedScale * backtestOptimised[t] << ","
+                    << marketCapScale * backtestMarketCap[t] << "," 
+                    << ftseScale * backtestFtse[t] << "\n";
+            }
+
+            out.close();
+
+            std::cout << "Wrote portfolio_data/performance_timeseries.csv\n";
+
         } else {
             std::cout
                 << "\nNo backtest available - the data was generated "
@@ -350,12 +375,12 @@ int main() {
                    "backtest.\n";
         }
 
-        std::cout << "\nProgram completed successfully.\n";
+        std::cout << "\nProgram completed successfully\n\n";
     } catch (const std::exception& exception) {
         std::cerr
             << "\nERROR: "
             << exception.what()
-            << '\n';
+            << "\n";
 
         return 1;
     }

@@ -15,9 +15,7 @@ std::vector<std::string> splitCSVLine(const std::string& line) {
 
     std::string value;
 
-    while (std::getline(stream, value, ',')) {
-        values.push_back(value);
-    }
+    while (std::getline(stream, value, ',')) { values.push_back(value); }
 
     return values;
 }
@@ -62,7 +60,7 @@ void loadAssets(const std::string& filename, MarketData& marketData) {
 
         std::vector<std::string> values = splitCSVLine(line);
 
-                if (values.size() < 6) {
+        if (values.size() < 6) {
             throw std::runtime_error("Invalid row in assets.csv: " + line);
         }
 
@@ -96,7 +94,7 @@ void loadCovariance(const std::string& filename, MarketData& marketData) {
 
     std::string line;
 
-    // First line contains the column tickers.
+    // first line contains the column tickers
     if (!std::getline(file, line)) {
         throw std::runtime_error("Covariance file is empty.");
     }
@@ -262,25 +260,20 @@ void loadBacktestData(const std::string& filename, MarketData& marketData) {
     }
 }
 
-// loads backtest_prices.csv (optional - only present alongside a
-// backtest period). Ticker columns are matched by name rather than
-// position, same approach as loadBacktestData.
-void loadBacktestPrices(const std::string& filename, MarketData& marketData) {
-    if (!marketData.backtestAvailable) { return; }
-
+void loadPriceSeries(
+    const std::string& filename,
+    const MarketData& marketData,
+    std::vector<std::string>& dates,
+    Eigen::MatrixXd& prices,
+    Eigen::VectorXd& ftsePrices
+) {
     std::ifstream file(filename);
-
     if (!file.is_open()) {
-        std::cerr
-            << "Warning: could not open " << filename
-            << ". Backtest volatility/Sharpe will be unavailable.\n";
-        marketData.backtestAvailable = false;
-        return;
+        throw std::runtime_error("Could not open price file: " + filename);
     }
 
     std::string line;
     std::getline(file, line);
-
     std::vector<std::string> headers = splitCSVLine(line);
 
     std::map<std::string, std::size_t> columnByTicker;
@@ -289,13 +282,14 @@ void loadBacktestPrices(const std::string& filename, MarketData& marketData) {
     }
 
     const std::size_t n = marketData.assets.size();
-
     std::vector<std::size_t> assetColumns(n);
+
     for (std::size_t i = 0; i < n; ++i) {
         auto it = columnByTicker.find(marketData.assets[i].yfinanceTicker);
         if (it == columnByTicker.end()) {
             throw std::runtime_error(
-                "No backtest price series found for " + marketData.assets[i].ticker
+                "No price series for " + marketData.assets[i].ticker
+                + " in " + filename
             );
         }
         assetColumns[i] = it->second;
@@ -303,7 +297,7 @@ void loadBacktestPrices(const std::string& filename, MarketData& marketData) {
 
     auto ftseIt = columnByTicker.find("^FTSE");
     if (ftseIt == columnByTicker.end()) {
-        throw std::runtime_error("No FTSE 100 column in backtest prices file.");
+        throw std::runtime_error("No FTSE 100 column in " + filename);
     }
     std::size_t ftseColumn = ftseIt->second;
 
@@ -312,33 +306,55 @@ void loadBacktestPrices(const std::string& filename, MarketData& marketData) {
 
     while (std::getline(file, line)) {
         if (line.empty()) { continue; }
-
         std::vector<std::string> values = splitCSVLine(line);
+
+        dates.push_back(values[0]);
 
         std::vector<double> row(n);
         for (std::size_t i = 0; i < n; ++i) {
             row[i] = stringToDouble(values[assetColumns[i]]);
         }
         rows.push_back(row);
-
         ftseRows.push_back(stringToDouble(values[ftseColumn]));
     }
 
     const std::size_t numberOfDates = rows.size();
-
     if (numberOfDates < 2) {
-        throw std::runtime_error("Not enough dates in backtest prices file.");
+        throw std::runtime_error("Not enough dates in " + filename);
     }
 
-    marketData.backtestPrices = Eigen::MatrixXd(numberOfDates, n);
-    marketData.ftseBacktestPrices = Eigen::VectorXd(numberOfDates);
+    prices = Eigen::MatrixXd(numberOfDates, n);
+    ftsePrices = Eigen::VectorXd(numberOfDates);
 
     for (std::size_t t = 0; t < numberOfDates; ++t) {
-        for (std::size_t i = 0; i < n; ++i) {
-            marketData.backtestPrices(t, i) = rows[t][i];
-        }
-        marketData.ftseBacktestPrices(t) = ftseRows[t];
+        for (std::size_t i = 0; i < n; ++i) { prices(t, i) = rows[t][i]; }
+        ftsePrices(t) = ftseRows[t];
     }
+}
+
+// loads backtest_prices.csv (optional - only present alongside a
+// backtest period). Ticker columns are matched by name rather than
+// position, same approach as loadBacktestData.
+void loadBacktestPrices(const std::string& filename, MarketData& marketData) {
+    if (!marketData.backtestAvailable) { return; }
+
+    loadPriceSeries(
+        filename,
+        marketData,
+        marketData.backtestDates,
+        marketData.backtestPrices,
+        marketData.ftseBacktestPrices
+    );
+}
+
+void loadTrainingPrices(const std::string& filename, MarketData& marketData) {
+    loadPriceSeries(
+        filename,
+        marketData,
+        marketData.trainingDates,
+        marketData.trainingPrices,
+        marketData.trainingFtsePrices
+    );
 }
 
 // validates data
@@ -383,6 +399,8 @@ MarketData loadMarketData(const std::string& dataDirectory) {
     loadBacktestData(dataDirectory + "/backtest.csv", marketData);
 
     loadBacktestPrices(dataDirectory + "/backtest_prices.csv", marketData);
+
+    loadTrainingPrices(dataDirectory + "/training_prices.csv", marketData);
 
     validateMarketData(marketData);
 

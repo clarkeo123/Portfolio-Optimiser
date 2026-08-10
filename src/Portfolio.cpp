@@ -41,17 +41,13 @@ double calculateVolatility(
         );
     }
 
-    // converts std::vector<double> to an Eigen vector.
+    // converts std::vector<double> to an Eigen vector
     Eigen::VectorXd weights(n);
 
     for (std::size_t i = 0; i < n; ++i) {
         weights(i) = portfolio.weights[i];
     }
 
-    // portfolio variance:
-    //
-    //     w^T Sigma w
-    //
     double variance = weights.transpose() * marketData.covariance * weights;
 
     if (variance < 0.0) {
@@ -162,7 +158,34 @@ double annualisedVolatilityFromSeries(
     for (double r : logReturns) { variance += (r - mean) * (r - mean); }
     variance /= static_cast<double>(numberOfReturns - 1);
 
-    return std::sqrt(variance) * std::sqrt(static_cast<double>(tradingDaysPerYear));
+    return std::sqrt(variance) 
+        * std::sqrt(static_cast<double>(tradingDaysPerYear));
+}
+
+std::vector<double> computeValueSeries(
+    const std::vector<double>& weights,
+    double cashWeight,
+    const Eigen::MatrixXd& prices,
+    double totalCashReturn
+) {
+    const std::size_t numberOfDates = prices.rows();
+    const std::size_t n = weights.size();
+
+    double dailyCashLogGrowth =
+        std::log(1.0 + totalCashReturn)
+        / static_cast<double>(numberOfDates - 1);
+
+    std::vector<double> value(numberOfDates, 0.0);
+
+    for (std::size_t t = 0; t < numberOfDates; ++t) {
+        double stockValue = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            stockValue += weights[i] * (prices(t, i) / prices(0, i));
+        }
+        value[t] = stockValue + cashWeight * std::exp(dailyCashLogGrowth * t);
+    }
+
+    return value;
 }
 
 } // namespace
@@ -175,31 +198,27 @@ std::vector<double> calculateBacktestValueSeries(
         throw std::runtime_error("No backtest data is available.");
     }
 
-    const std::size_t numberOfDates = marketData.backtestPrices.rows();
-    const std::size_t n = marketData.assets.size();
+    return computeValueSeries(
+        portfolio.weights, portfolio.cashWeight,
+        marketData.backtestPrices, marketData.backtestRiskFreeReturn
+    );
+}
 
-    // approximates the cash leg's daily growth by spreading the known
-    // total backtest cash return evenly (in log terms) across the
-    // window - there's no daily SONIA path loaded, only the total
-    double dailyCashLogGrowth =
-        std::log(1.0 + marketData.backtestRiskFreeReturn)
-        / static_cast<double>(numberOfDates - 1);
+std::vector<double> calculateTrainingValueSeries(
+    const Portfolio& portfolio,
+    const MarketData& marketData
+) {
+    double years =
+        static_cast<double>(marketData.trainingPrices.rows() - 1)
+        / static_cast<double>(marketData.tradingDaysPerYear);
 
-    std::vector<double> value(numberOfDates, 0.0);
+    double totalCashReturn =
+        std::pow(1.0 + marketData.riskFreeRate, years) - 1.0;
 
-    for (std::size_t t = 0; t < numberOfDates; ++t) {
-        double stockValue = 0.0;
-
-        for (std::size_t i = 0; i < n; ++i) {
-            stockValue +=
-                portfolio.weights[i]
-                * (marketData.backtestPrices(t, i) / marketData.backtestPrices(0, i));
-        }
-
-        value[t] = stockValue + portfolio.cashWeight * std::exp(dailyCashLogGrowth * t);
-    }
-
-    return value;
+    return computeValueSeries(
+        portfolio.weights, portfolio.cashWeight,
+        marketData.trainingPrices, totalCashReturn
+    );
 }
 
 double calculateBacktestVolatility(

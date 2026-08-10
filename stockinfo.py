@@ -109,16 +109,8 @@ def get_sonia_data(start_date, end_date):
     return data
 
 def calculate_backtest_risk_free_return(backtest_start, backtest_end):
-    """
-    Calculates the compounded cash return between two dates using
-    historical daily SONIA observations.
-
-    SONIA is an overnight rate. For each observation, the rate is
-    compounded over the number of calendar days until the next
-    SONIA observation.
-
-    ACT/365 day-count convention is used.
-    """
+    # calculates the compounded cash return between two dates using
+    # historical daily SONIA observations
 
     start_date = pd.Timestamp(backtest_start).normalize()
     end_date = pd.Timestamp(backtest_end).normalize()
@@ -128,58 +120,41 @@ def calculate_backtest_risk_free_return(backtest_start, backtest_end):
             "Backtest end date must be after backtest start date."
         )
 
-    sonia = get_sonia_data(
-        start_date,
-        end_date
-    )
+    sonia = get_sonia_data(start_date, end_date)
 
-    # We need a SONIA observation on or before the backtest start.
-    before_start = sonia[
-        sonia["Date"] <= start_date
-    ]
+    before_start = sonia[sonia["Date"] <= start_date]
 
     if before_start.empty:
         raise ValueError(
             "No SONIA observation exists on or before the backtest start date."
         )
 
-    # Start with the most recent available SONIA observation
-    # on or before the backtest start.
+    # starts with the most recent available SONIA observation
+    # on or before the backtest start
     current_rate = before_start.iloc[-1]["SONIA"]
     current_date = start_date
 
     growth_factor = 1.0
 
-    future_observations = sonia[
-        sonia["Date"] > start_date
-    ]
+    future_observations = sonia[sonia["Date"] > start_date]
 
     for _, row in future_observations.iterrows():
 
         observation_date = row["Date"]
 
-        if observation_date > end_date:
-            break
+        if observation_date > end_date: break
 
-        days = (
-            observation_date - current_date
-        ).days
+        days = (observation_date - current_date).days
 
         if days > 0:
-            growth_factor *= (
-                1.0
-                + (current_rate / 100.0)
-                * (days / 365.0)
-            )
+            growth_factor *= (1.0 + (current_rate / 100.0) * (days / 365.0))
 
         current_date = observation_date
         current_rate = row["SONIA"]
 
-    # Accrue from the final SONIA observation through the
-    # requested backtest end date.
-    remaining_days = (
-        end_date - current_date
-    ).days
+    # accrues from the final SONIA observation through the
+    # requested backtest end date
+    remaining_days = (end_date - current_date).days
 
     if remaining_days > 0:
         growth_factor *= (
@@ -196,17 +171,15 @@ def annualise_return(total_return, start_date, end_date):
 
 FTSE100_INDEX = "^FTSE"
 
-
 def get_market_data(tickers: list[str], years: int = 5, end_date=None):
-    # Returns:
+    # returns:
     #   stock_prices
     #   stock_log_returns
     #   market_log_returns
     #   start_date
     #   end_date
 
-    if end_date is None:
-        end_date = pd.Timestamp.today().normalize()
+    if end_date is None: end_date = pd.Timestamp.today().normalize()
 
     start_date = end_date - pd.DateOffset(years=years)
 
@@ -242,48 +215,35 @@ def get_market_data(tickers: list[str], years: int = 5, end_date=None):
 
     stock_prices = pd.DataFrame(prices).sort_index()
 
-    # FTSE 100 index prices.
+    # FTSE 100 index prices
     try:
-        market_prices = (
-            data[FTSE100_INDEX]["Close"]
-            .dropna()
-        )
+        market_prices = (data[FTSE100_INDEX]["Close"].dropna())
     except KeyError:
         raise ValueError(
-            "Could not download FTSE 100 index data (^FTSE)."
+            "Could not download FTSE 100 index data (^FTSE)"
         )
 
-    # Calculate log returns.
-    stock_log_returns = np.log(
-        stock_prices / stock_prices.shift(1)
-    )
+    # calculates log returns
+    stock_log_returns = np.log(stock_prices / stock_prices.shift(1))
 
-    market_log_returns = np.log(
-        market_prices / market_prices.shift(1)
-    )
+    market_log_returns = np.log(market_prices / market_prices.shift(1))
 
-    # Align everything by date, but DO NOT remove dates
-    # just because one stock is missing.
+    # aligns everything by date, but doesn't remove dates
+    # just because one stock is missing
     combined_returns = pd.concat(
-        [
-            stock_log_returns,
-            market_log_returns.rename(FTSE100_INDEX)
-        ],
+        [stock_log_returns, market_log_returns.rename(FTSE100_INDEX)],
         axis=1
     )
 
-    stock_log_returns = combined_returns.drop(
-        columns=FTSE100_INDEX
-    )
+    stock_log_returns = combined_returns.drop(columns=FTSE100_INDEX)
 
-    market_log_returns = combined_returns[
-        FTSE100_INDEX
-    ]
+    market_log_returns = combined_returns[FTSE100_INDEX]
 
     return (
         stock_prices,
         stock_log_returns,
         market_log_returns,
+        market_prices,
         start_date,
         end_date
     )
@@ -299,50 +259,31 @@ def calculate_market_return(market_log_returns, trading_days=252):
     return annualised_return
 
 
-def calculate_betas(
-    stock_log_returns,
-    market_log_returns
-):
-    # Calculate beta for each stock:
-    #
-    # beta = Cov(stock, market) / Var(market)
+def calculate_betas(stock_log_returns, market_log_returns):
+    # calculates beta for each stock
 
     betas = {}
 
     for ticker in stock_log_returns.columns:
 
         aligned = pd.concat(
-            [
-                stock_log_returns[ticker],
-                market_log_returns
-            ],
+            [stock_log_returns[ticker], market_log_returns],
             axis=1
         ).dropna()
 
         stock_returns = aligned.iloc[:, 0]
         market_returns = aligned.iloc[:, 1]
 
-        market_variance = market_returns.var(
-            ddof=1
-        )
+        market_variance = market_returns.var(ddof=1)
 
         if market_variance <= 0:
-            raise ValueError(
-                f"Market variance is zero for {ticker}."
-            )
+            raise ValueError(f"Market variance is zero for {ticker}.")
 
-        covariance = stock_returns.cov(
-            market_returns
-        )
+        covariance = stock_returns.cov(market_returns)
 
-        betas[ticker] = (
-            covariance / market_variance
-        )
+        betas[ticker] = (covariance / market_variance)
 
-    return pd.Series(
-        betas,
-        name="Beta"
-    )
+    return pd.Series(betas, name="Beta")
 
 def calculate_capm_returns(betas, risk_free_rate, market_return):
     market_risk_premium = market_return - risk_free_rate
@@ -356,8 +297,6 @@ def calculate_capm_returns(betas, risk_free_rate, market_return):
 def get_market_caps(tickers, target_date) -> pd.Series:
     # returns a series of market capitalisations indexed by yfinance
 
-    print(target_date)
-
     market_caps = {}
 
     for ticker in tickers:
@@ -365,17 +304,14 @@ def get_market_caps(tickers, target_date) -> pd.Series:
             df_hist = yf.Ticker(ticker).history(start=target_date)
             close_price = df_hist["Close"].iloc[0]
 
-            #print(f"Close price for {ticker}: {close_price}")
-
             # gets shares outstanding from balance sheet / financials
             shares = yf.Ticker(ticker).get_shares_full(start=target_date)
             if shares is not None and not shares.empty:
-                share_count = shares.iloc[-1]
-                #print(f"Shares outstanding for {ticker}: {share_count}")
+                share_count = shares.iloc[0]
             else:
                 print(
                     f"Warning: no shares outstanding data found for {ticker} " 
-                    f"on {target_date}, using current info instead."
+                    f"on {target_date}, using current info instead"
                 )
                 # falls back to current info if historical count isn't indexed
                 share_count = yf.Ticker(ticker).info.get("sharesOutstanding")
@@ -387,7 +323,7 @@ def get_market_caps(tickers, target_date) -> pd.Series:
         if not market_cap or market_cap <= 0:
             print(
                 f"Warning: no market cap found for {ticker} on "
-                f"{target_date}, using current market cap instead."
+                f"{target_date}, using current market cap instead"
             )
             market_cap = yf.Ticker(ticker).fast_info["market_cap"]
             if not market_cap or market_cap <= 0:
@@ -404,7 +340,7 @@ def calculate_market_cap_weights(market_caps: pd.Series) -> pd.Series:
     total = market_caps.sum()
 
     if total <= 0:
-        raise ValueError("Total market capitalisation is zero or negative.")
+        raise ValueError("Total market capitalisation is zero or negative")
 
     weights = market_caps / total
     weights.name = "MarketCapWeight"
@@ -422,15 +358,7 @@ def calculate_covariance_matrix(
     return annualised_covariance
 
 def get_backtest_data(tickers, backtest_start, backtest_end):
-    """
-    Downloads prices for `tickers` plus the FTSE 100 index between
-    backtest_start and backtest_end, and returns the total (simple)
-    return each one produced over that window:
-
-        return = final_close / first_close - 1
-
-    Returns (stock_forward_returns: pd.Series, ftse_forward_return: float)
-    """
+    # rerturns total simple returns across the backtest period
     download_tickers = list(tickers) + [FTSE100_INDEX]
 
     data = yf.download(
@@ -490,6 +418,14 @@ def save_backtest(forward_returns: pd.Series, output_path: str):
 
 def save_backtest_prices(backtest_prices: pd.DataFrame, output_path: str):
     backtest_prices.to_csv(output_path, index_label="Date")
+
+def save_training_prices(
+    stock_prices: pd.DataFrame, market_prices: pd.Series, output_path: str
+):
+    combined = stock_prices.copy()
+    combined[FTSE100_INDEX] = market_prices
+    combined = combined.dropna()
+    combined.to_csv(output_path, index_label="Date")
 
 def save_assets(
     tickers_df, betas, expected_returns, market_cap_weights, output_path
@@ -582,35 +518,19 @@ def filter_stocks_by_data_quality(
     stock_log_returns,
     minimum_data_fraction=0.95
 ):
-    """
-    Remove stocks which have less than the required fraction
-    of available observations.
-
-    For example, 0.95 means a stock must have at least 95%
-    of the observations available.
-    """
+    # removes stocks with insufficient historical data availability
 
     total_observations = len(stock_log_returns)
 
-    minimum_observations = (
-        total_observations
-        * minimum_data_fraction
-    )
+    minimum_observations = (total_observations * minimum_data_fraction)
 
     valid_tickers = []
 
     for ticker in stock_log_returns.columns:
 
-        available_observations = (
-            stock_log_returns[ticker]
-            .notna()
-            .sum()
-        )
+        available_observations = (stock_log_returns[ticker].notna().sum())
 
-        fraction_available = (
-            available_observations
-            / total_observations
-        )
+        fraction_available = (available_observations / total_observations)
 
         if available_observations >= minimum_observations:
             valid_tickers.append(ticker)
@@ -622,12 +542,9 @@ def filter_stocks_by_data_quality(
                 f"of observations available."
             )
 
-    return stock_log_returns[
-        valid_tickers
-    ]
+    return stock_log_returns[valid_tickers]
 
 if __name__ == "__main__":
-
     import argparse
     import os
 
@@ -672,13 +589,20 @@ if __name__ == "__main__":
 
     # historical stock + FTSE 100 data
     (
-        prices, stock_log_returns, market_log_returns, start_date, end_date
+        prices, stock_log_returns, market_log_returns, market_prices, start_date, end_date
     ) = get_market_data(tickers, years=YEARS, end_date=END_DATE)
 
-    training_cash_return = calculate_backtest_risk_free_return(start_date, end_date)
-    risk_free_rate = annualise_return(training_cash_return, start_date, end_date)
+    training_cash_return = calculate_backtest_risk_free_return(
+        start_date, end_date
+    )
+    risk_free_rate = annualise_return(
+        training_cash_return, start_date, end_date
+    )
 
-    print(f"Historical SONIA-derived risk-free rate ({start_date.date()} to {end_date.date()}): {risk_free_rate:.4%}")
+    print(
+        f"Historical SONIA-derived risk-free rate ({start_date.date()} to "
+        f"{end_date.date()}): {risk_free_rate:.4%}"
+    )
 
     # filters stocks based on historical data availability
     stock_log_returns = filter_stocks_by_data_quality(
@@ -759,8 +683,7 @@ if __name__ == "__main__":
         market_caps.loc[common_tickers]
     )
 
-    # backtest: how would this portfolio's stocks have performed from
-    # end_date up to today?
+    # backtest
     backtest_available = END_DATE < TODAY
 
     forward_returns = None
@@ -822,10 +745,19 @@ if __name__ == "__main__":
 
     save_covariance(covariance, f"{OUTPUT_DIR}/covariance.csv")
 
+    save_training_prices(
+        prices[common_tickers],
+        market_prices,
+        f"{OUTPUT_DIR}/training_prices.csv"
+    )
+
     if backtest_available:
         save_backtest(forward_returns, f"{OUTPUT_DIR}/backtest.csv")
 
-        save_backtest_prices(backtest_prices, f"{OUTPUT_DIR}/backtest_prices.csv")
+        save_backtest_prices(
+            backtest_prices,
+            f"{OUTPUT_DIR}/backtest_prices.csv"
+        )
 
     save_metadata(
         risk_free_rate,
@@ -848,4 +780,4 @@ if __name__ == "__main__":
     )
 
     print()
-    print("Portfolio optimisation data generated.")
+    print("Portfolio optimisation data generated")

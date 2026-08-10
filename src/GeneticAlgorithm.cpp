@@ -208,13 +208,11 @@ bool GeneticAlgorithm::isValidPortfolio(const Portfolio& portfolio) {
 }
 
 void GeneticAlgorithm::calculateObjectiveRanges() {
-    /*
-     * Generate a separate calibration population.
-     *
-     * The ranges are fixed before the actual optimisation
-     * begins, which means fitness values remain comparable
-     * between generations.
-     */
+    
+    // generates a separate calibration population
+
+    // ranges are fixed before the actual optimisation begins
+    // so fitness values are comparable between generations
 
     const int calibrationPopulationSize =
         std::max(settings.populationSize * 10, 1000);
@@ -323,8 +321,7 @@ double GeneticAlgorithm::calculatePopulationDiversity(
         totalDistance += std::sqrt(squaredDistance);
     }
 
-    return totalDistance /
-           static_cast<double>(population.size());
+    return totalDistance / static_cast<double>(population.size());
 }
 
 double GeneticAlgorithm::calculateNormalisedReturn(
@@ -451,11 +448,7 @@ void GeneticAlgorithm::mutate(Portfolio& portfolio) {
         double probability = randomDouble(0.0, 1.0);
 
         if (probability < settings.mutationRate) {
-            /*
-                adds a random perturbation
-
-                mutationStrength controls the size of the mutation
-            */
+            // adds a random perturbation
 
             double mutation =
                 randomDouble(
@@ -466,13 +459,7 @@ void GeneticAlgorithm::mutate(Portfolio& portfolio) {
             portfolio.weights[i] += mutation;
         }
     }
-
-
-    /*
-        mutation can produce invalid weights
-
-        repair brings the portfolio back into the feasible region
-    */
+    // brings the weights into a valid region
 
     repairPortfolio(portfolio);
 }
@@ -520,13 +507,8 @@ Portfolio GeneticAlgorithm::run(){
 
     double bestFitness = bestPortfolio.fitness;
 
-    /*
-     * Store optimisation history.
-     *
-     * Fitness values are now comparable between
-     * generations because the normalisation ranges
-     * remain fixed.
-     */
+    // stores optimisation history
+    
     std::vector<std::string> history;
 
     history.push_back(
