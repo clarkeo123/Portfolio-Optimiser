@@ -376,6 +376,59 @@ int main() {
         }
 
         std::cout << "\nProgram completed successfully\n\n";
+
+        bool fileExists = std::ifstream("portfolio_data/seed_sweep_results.csv").good();
+
+        std::ofstream sweepOut("portfolio_data/seed_sweep_results.csv", std::ios::app);
+
+        if (!fileExists) {
+            sweepOut
+                << "Seed,TrainExpectedReturn,TrainVolatility,TrainSharpe,"
+                "BacktestReturn,BacktestVolatility,BacktestSharpe";
+
+            for (const Asset& asset : marketData.assets) {
+                sweepOut << ",Weight_" << asset.ticker;
+            }
+
+            sweepOut << ",CashWeight,GrossExposure,NetExposure\n";
+        }
+
+        sweepOut
+            << settings.randomSeed << ','
+            << bestPortfolio.expectedReturn << ','
+            << bestPortfolio.volatility << ','
+            << bestPortfolio.sharpeRatio << ',';
+
+        if (marketData.backtestAvailable) {
+            sweepOut
+                << calculatePortfolioForwardReturn(bestPortfolio, marketData) << ','
+                << calculateBacktestVolatility(bestPortfolio, marketData) << ','
+                << calculateBacktestSharpeRatio(bestPortfolio, marketData);
+        } else {
+            sweepOut << ",,";
+        }
+
+        // records every stock's final weight for this seed
+        for (double weight : bestPortfolio.weights) {
+            sweepOut << ',' << weight;
+        }
+
+        // records cash separately
+        sweepOut << ',' << bestPortfolio.cashWeight;
+
+        double grossExposure = 0.0;
+        double netExposure = 0.0;
+
+        for (double weight : bestPortfolio.weights) {
+            grossExposure += std::abs(weight);
+            netExposure += weight;
+        }
+
+        sweepOut << ',' << grossExposure
+                << ',' << netExposure
+                << '\n';
+
+        sweepOut << '\n';
     } catch (const std::exception& exception) {
         std::cerr
             << "\nERROR: "
