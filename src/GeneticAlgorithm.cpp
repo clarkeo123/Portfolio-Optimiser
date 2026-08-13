@@ -380,6 +380,11 @@ double GeneticAlgorithm::evaluateFitness(Portfolio& portfolio)
         settings.returnWeight * normalisedReturn
         - settings.volatilityWeight * normalisedVolatility
         + settings.sharpeWeight * normalisedSharpe;
+    
+    // small tie-breaker: prefer portfolios that keep more of the
+    // portfolio invested rather than sitting in cash
+    portfolio.fitness -=
+        settings.cashPenaltyWeight * portfolio.cashWeight;
 
     return portfolio.fitness;
 }

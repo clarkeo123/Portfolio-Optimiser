@@ -110,6 +110,10 @@ int main() {
 
         std::cin >> settings.sharpeWeight;
 
+        std::cout << "Cash penalty weight: ";
+
+        std::cin >> settings.cashPenaltyWeight;
+
         std::cout << "Random seed: ";
         std::cin >> settings.randomSeed;
 
@@ -175,6 +179,11 @@ int main() {
             << "Sharpe objective weight: "
             << settings.sharpeWeight
             << "\n\n";
+
+        std::cout
+            << "Cash penalty weight: "
+            << settings.cashPenaltyWeight
+            << "\n";
 
         // runs GA
 

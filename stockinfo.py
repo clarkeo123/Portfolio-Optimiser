@@ -1,4 +1,5 @@
 from datetime import date
+from sklearn.covariance import LedoitWolf
 
 import yfinance as yf
 import pandas as pd
@@ -349,11 +350,47 @@ def calculate_market_cap_weights(market_caps: pd.Series) -> pd.Series:
 
 def calculate_covariance_matrix(
     log_returns: pd.DataFrame,
-    trading_days: int = 252
+    trading_days: int = 252,
+    shrinkage: float = 0.25
 ) -> pd.DataFrame:
     daily_covariance = log_returns.cov()
 
-    annualised_covariance = daily_covariance * trading_days
+    # converts covariance to correlation
+    std = np.sqrt(np.diag(daily_covariance.values))
+    correlation = daily_covariance.values / np.outer(std, std)
+
+    # averages off-diagonal correlation
+    n = correlation.shape[0]
+    average_correlation = (
+        correlation.sum() - np.trace(correlation)
+    ) / (n * (n - 1))
+
+    # builds constant-correlation target
+    target_correlation = np.full(
+        correlation.shape,
+        average_correlation
+    )
+    np.fill_diagonal(target_correlation, 1.0)
+
+    # converts target correlation back to covariance
+    target_covariance = (
+        target_correlation * np.outer(std, std)
+    )
+
+    # shrinks the sample covariance toward the target
+    shrunk_covariance = (
+        (1.0 - shrinkage) * daily_covariance.values
+        + shrinkage * target_covariance
+    )
+
+    annualised_covariance = (
+        pd.DataFrame(
+            shrunk_covariance,
+            index=daily_covariance.index,
+            columns=daily_covariance.columns
+        )
+        * trading_days
+    )
 
     return annualised_covariance
 

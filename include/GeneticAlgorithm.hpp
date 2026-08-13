@@ -26,6 +26,9 @@ struct GASettings
     double volatilityWeight;
     double sharpeWeight;
 
+    // small tie-breaking penalty for holding cash
+    double cashPenaltyWeight;
+
     // stock constraints
     double minimumStockWeight;
     double maximumStockWeight;
