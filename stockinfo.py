@@ -58,7 +58,9 @@ def get_sonia_data(start_date, end_date):
 
     params = {
         "csv.x": "yes",
-        "Datefrom": pd.Timestamp(start_date).strftime("%d/%b/%Y"),
+        "Datefrom": (
+            pd.Timestamp(start_date) - pd.Timedelta(days=7)
+        ).strftime("%d/%b/%Y"),
         "Dateto": pd.Timestamp(end_date).strftime("%d/%b/%Y"),
         "SeriesCodes": SONIA_SERIES_CODE,
         "CSVF": "TN",
@@ -171,6 +173,7 @@ def annualise_return(total_return, start_date, end_date):
     return (1.0 + total_return) ** (1.0 / years) - 1.0
 
 FTSE100_INDEX = "^FTSE"
+FTSE100_FALLBACK = "ISF.L"
 
 def get_market_data(tickers: list[str], years: int = 5, end_date=None):
     # returns:
@@ -184,7 +187,10 @@ def get_market_data(tickers: list[str], years: int = 5, end_date=None):
 
     start_date = end_date - pd.DateOffset(years=years)
 
-    download_tickers = list(tickers) + [FTSE100_INDEX]
+    download_tickers = list(tickers) + [
+        FTSE100_INDEX,
+        FTSE100_FALLBACK,
+    ]
 
     data = yf.download(
         download_tickers,
@@ -216,14 +222,30 @@ def get_market_data(tickers: list[str], years: int = 5, end_date=None):
 
     stock_prices = pd.DataFrame(prices).sort_index()
 
-    # FTSE 100 index prices
+    # FTSE 100 market prices
+    market_prices = pd.Series(dtype=float)
+
     try:
-        market_prices = (data[FTSE100_INDEX]["Close"].dropna())
+        market_prices = data[FTSE100_INDEX]["Close"].dropna()
     except KeyError:
-        raise ValueError(
-            "Could not download FTSE 100 index data (^FTSE)"
+        pass
+
+    if len(market_prices) < 2:
+        print(
+            f"Warning: {FTSE100_INDEX} unavailable; "
+            f"using {FTSE100_FALLBACK} as FTSE 100 proxy."
         )
 
+        try:
+            market_prices = data[FTSE100_FALLBACK]["Close"].dropna()
+        except KeyError:
+            market_prices = pd.Series(dtype=float)
+
+    if len(market_prices) < 2:
+        raise ValueError(
+            "Could not download either ^FTSE or ISF.L market data."
+        )
+    
     # calculates log returns
     stock_log_returns = np.log(stock_prices / stock_prices.shift(1))
 
@@ -291,6 +313,13 @@ def calculate_capm_returns(betas, risk_free_rate, market_return):
 
     expected_returns = risk_free_rate + (betas * market_risk_premium)
 
+    if expected_returns.isna().any():
+        missing = expected_returns[expected_returns.isna()].index.tolist()
+
+        raise ValueError(
+            f"Expected returns contain NaN values for: {missing}"
+        )
+
     expected_returns.name = "ExpectedReturn"
 
     return expected_returns
@@ -351,7 +380,7 @@ def calculate_market_cap_weights(market_caps: pd.Series) -> pd.Series:
 def calculate_covariance_matrix(
     log_returns: pd.DataFrame,
     trading_days: int = 252,
-    shrinkage: float = 0.25
+    shrinkage: float = 0.7
 ) -> pd.DataFrame:
     daily_covariance = log_returns.cov()
 
@@ -604,6 +633,14 @@ if __name__ == "__main__":
         default=5,
         help="Length of the historical training window, in years.",
     )
+    parser.add_argument(
+        "--backtest-end-date",
+        type=str,
+        default=None,
+        help=(
+            "Backtest end date (YYYY-MM-DD). Defaults to today."
+        ),
+    )
     args = parser.parse_args()
 
     TODAY = pd.Timestamp.today().normalize()
@@ -611,6 +648,17 @@ if __name__ == "__main__":
     END_DATE = (
         pd.Timestamp(args.end_date).normalize() if args.end_date else TODAY
     )
+
+    BACKTEST_END_DATE = (
+        pd.Timestamp(args.backtest_end_date).normalize()
+        if args.backtest_end_date
+        else TODAY
+    )
+
+    if BACKTEST_END_DATE <= END_DATE:
+        raise ValueError(
+            "Backtest end date must be after the training end date."
+        )
 
     YEARS = args.years
     TRADING_DAYS = 252
@@ -721,7 +769,7 @@ if __name__ == "__main__":
     )
 
     # backtest
-    backtest_available = END_DATE < TODAY
+    backtest_available = BACKTEST_END_DATE > END_DATE
 
     forward_returns = None
     ftse_forward_return = None
@@ -729,16 +777,17 @@ if __name__ == "__main__":
 
     if backtest_available:
         print(
-            f"\nRunning backtest from {END_DATE.date()} to {TODAY.date()}..."
+            f"\nRunning backtest from {END_DATE.date()} "
+            f"to {BACKTEST_END_DATE.date()}..."
         )
 
         forward_returns, ftse_forward_return, backtest_prices = get_backtest_data(
-            common_tickers, END_DATE, TODAY
+            common_tickers, END_DATE, BACKTEST_END_DATE
         )
 
         backtest_risk_free_return = calculate_backtest_risk_free_return(
             END_DATE,
-            TODAY
+            BACKTEST_END_DATE
         )
 
         print(
@@ -767,8 +816,8 @@ if __name__ == "__main__":
         )
     else:
         print(
-            "\nNo backtest period available (end date is today) - pass "
-            "--end-date with an earlier date to enable a backtest."
+            "\nNo backtest period available. Pass --end-date and, optionally, "
+            "--backtest-end-date to define a backtest period."
         )
 
     # saves data for C++
@@ -807,7 +856,9 @@ if __name__ == "__main__":
         f"{OUTPUT_DIR}/metadata.csv",
         TRADING_DAYS,
         backtest_start_date=END_DATE.date() if backtest_available else None,
-        backtest_end_date=TODAY.date() if backtest_available else None,
+        backtest_end_date=(
+            BACKTEST_END_DATE.date() if backtest_available else None
+        ),
         ftse_forward_return=(
             ftse_forward_return if backtest_available else None
         ),
@@ -818,3 +869,37 @@ if __name__ == "__main__":
 
     print()
     print("Portfolio optimisation data generated")
+
+    assets = pd.read_csv("portfolio_data/assets.csv")
+    backtest = pd.read_csv("portfolio_data/backtest.csv")
+
+    comparison = assets[["YFinanceTicker", "ExpectedReturn"]].merge(
+        backtest[["YFinanceTicker", "ForwardReturn"]],
+        on="YFinanceTicker",
+        how="inner"
+    )
+
+    correlation = comparison["ExpectedReturn"].corr(
+        comparison["ForwardReturn"]
+    )
+
+    print(f"\nExpectedReturn -> ForwardReturn correlation: {correlation:.4f}")
+
+    beta_comparison = assets[["YFinanceTicker", "Beta"]].merge(
+        backtest[["YFinanceTicker", "ForwardReturn"]],
+        on="YFinanceTicker",
+        how="inner"
+    )
+
+    beta_correlation = beta_comparison["Beta"].corr(
+        beta_comparison["ForwardReturn"]
+    )
+
+    print(f"Beta -> ForwardReturn correlation: {beta_correlation:.4f}")
+
+    rank_correlation = comparison["ExpectedReturn"].corr(
+        comparison["ForwardReturn"],
+        method="spearman"
+    )
+
+    print(f"ExpectedReturn rank -> ForwardReturn rank correlation: {rank_correlation:.4f}")
