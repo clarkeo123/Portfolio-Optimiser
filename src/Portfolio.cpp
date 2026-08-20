@@ -3,7 +3,6 @@
 #include <cmath>
 #include <stdexcept>
 
-
 double calculateExpectedReturn(
     const Portfolio& portfolio,
     const MarketData& marketData
@@ -11,6 +10,20 @@ double calculateExpectedReturn(
     if (portfolio.weights.size() != marketData.assets.size()) {
         throw std::runtime_error(
             "Number of portfolio weights does not match number of assets."
+        );
+    }
+
+    for (double weight : portfolio.weights) {
+        if (!std::isfinite(weight)) {
+            throw std::runtime_error(
+                "Portfolio contains a non-finite asset weight."
+            );
+        }
+    }
+
+    if (!std::isfinite(portfolio.cashWeight)) {
+        throw std::runtime_error(
+            "Portfolio contains a non-finite cash weight."
         );
     }
 
@@ -62,19 +75,16 @@ double calculateVolatility(
     return std::sqrt(variance);
 }
 
+double calculateSharpeRatioFromMetrics(
+    double expectedReturn,
+    double volatility,
+    double riskFreeRate
+) {
+    if (volatility <= 0.0) {
+        return 0.0;
+    }
 
-double calculateSharpeRatio(
-    const Portfolio& portfolio,
-    const MarketData& marketData
-)
-{
-    double volatility = calculateVolatility(portfolio, marketData);
-
-    if (volatility <= 0.0) { return 0.0; }
-
-    double expectedReturn = calculateExpectedReturn(portfolio, marketData);
-
-    return (expectedReturn - marketData.riskFreeRate) / volatility;
+    return (expectedReturn - riskFreeRate) / volatility;
 }
 
 Portfolio buildMarketCapWeightedPortfolio(const MarketData& marketData) {
@@ -101,8 +111,11 @@ Portfolio buildMarketCapWeightedPortfolio(const MarketData& marketData) {
 
     portfolio.volatility = calculateVolatility(portfolio, marketData);
 
-    portfolio.sharpeRatio = calculateSharpeRatio(portfolio, marketData);
-
+    portfolio.sharpeRatio = calculateSharpeRatioFromMetrics(
+        portfolio.expectedReturn,
+        portfolio.volatility,
+        marketData.riskFreeRate
+    );
     return portfolio;
 }
 
@@ -120,6 +133,20 @@ double calculatePortfolioForwardReturn(
     if (portfolio.weights.size() != marketData.assets.size()) {
         throw std::runtime_error(
             "Number of portfolio weights does not match number of assets."
+        );
+    }
+
+    for (double weight : portfolio.weights) {
+        if (!std::isfinite(weight)) {
+            throw std::runtime_error(
+                "Portfolio contains a non-finite asset weight."
+            );
+        }
+    }
+
+    if (!std::isfinite(portfolio.cashWeight)) {
+        throw std::runtime_error(
+            "Portfolio contains a non-finite cash weight."
         );
     }
 
@@ -143,6 +170,26 @@ double annualisedVolatilityFromSeries(
     const std::vector<double>& value,
     int tradingDaysPerYear
 ) {
+    if (value.size() < 3) {
+        throw std::runtime_error(
+            "At least three values are required to calculate volatility."
+        );
+    }
+
+    if (tradingDaysPerYear <= 0) {
+        throw std::runtime_error(
+            "Trading days per year must be positive."
+        );
+    }
+
+    for (double v : value) {
+        if (!std::isfinite(v) || v <= 0.0) {
+            throw std::runtime_error(
+                "Value series contains a non-positive or non-finite value."
+            );
+        }
+    }
+
     const std::size_t numberOfReturns = value.size() - 1;
 
     double mean = 0.0;
@@ -168,6 +215,32 @@ std::vector<double> computeValueSeries(
     const Eigen::MatrixXd& prices,
     double totalCashReturn
 ) {
+    if (weights.size() != static_cast<std::size_t>(prices.cols())) {
+        throw std::runtime_error(
+            "Number of portfolio weights does not match number of price columns."
+        );
+    }
+
+    if (prices.rows() < 2) {
+        throw std::runtime_error(
+            "At least two price dates are required."
+        );
+    }
+
+    if (totalCashReturn <= -1.0 || !std::isfinite(totalCashReturn)) {
+        throw std::runtime_error(
+            "Invalid total cash return."
+        );
+    }
+
+    for (Eigen::Index i = 0; i < prices.cols(); ++i) {
+        if (!std::isfinite(prices(0, i)) || prices(0, i) <= 0.0) {
+            throw std::runtime_error(
+                "Initial asset price is non-positive or non-finite."
+            );
+        }
+    }
+
     const std::size_t numberOfDates = prices.rows();
     const std::size_t n = weights.size();
 
@@ -236,19 +309,40 @@ double calculateBacktestSharpeRatio(
     const MarketData& marketData
 ) {
     double volatility = calculateBacktestVolatility(portfolio, marketData);
-    if (volatility <= 0.0) { return 0.0; }
+    if (volatility <= 0.0) {
+        return 0.0;
+    }
 
     double years =
         static_cast<double>(marketData.backtestPrices.rows() - 1)
         / static_cast<double>(marketData.tradingDaysPerYear);
 
+    if (!std::isfinite(years) || years <= 0.0) {
+        throw std::runtime_error(
+            "Invalid backtest period."
+        );
+    }
+
     double totalReturn = calculatePortfolioForwardReturn(portfolio, marketData);
-    double annualisedReturn = std::pow(1.0 + totalReturn, 1.0 / years) - 1.0;
+
+    if (!std::isfinite(totalReturn) || totalReturn <= -1.0) {
+        throw std::runtime_error(
+            "Invalid portfolio forward return."
+        );
+    }
+
+    double annualisedReturn =
+        std::pow(1.0 + totalReturn, 1.0 / years) - 1.0;
+
     double annualisedRiskFreeRate =
-        std::pow(1.0 + marketData.backtestRiskFreeReturn, 1.0 / years) - 1.0;
+        std::pow(
+            1.0 + marketData.backtestRiskFreeReturn,
+            1.0 / years
+        ) - 1.0;
 
     return (annualisedReturn - annualisedRiskFreeRate) / volatility;
 }
+
 
 double calculateFTSEBacktestVolatility(const MarketData& marketData) {
     const auto& p = marketData.ftseBacktestPrices;
@@ -258,18 +352,40 @@ double calculateFTSEBacktestVolatility(const MarketData& marketData) {
     return annualisedVolatilityFromSeries(value, marketData.tradingDaysPerYear);
 }
 
-double calculateFTSEBacktestSharpeRatio(const MarketData& marketData) {
+double calculateFTSEBacktestSharpeRatio(
+    const MarketData& marketData
+) {
     double volatility = calculateFTSEBacktestVolatility(marketData);
-    if (volatility <= 0.0) { return 0.0; }
+    if (volatility <= 0.0) {
+        return 0.0;
+    }
 
     double years =
         static_cast<double>(marketData.ftseBacktestPrices.size() - 1)
         / static_cast<double>(marketData.tradingDaysPerYear);
 
+    if (!std::isfinite(years) || years <= 0.0) {
+        throw std::runtime_error(
+            "Invalid backtest period."
+        );
+    }
+
+    double totalReturn = marketData.ftseForwardReturn;
+
+    if (!std::isfinite(totalReturn) || totalReturn <= -1.0) {
+        throw std::runtime_error(
+            "Invalid FTSE forward return."
+        );
+    }
+
     double annualisedReturn =
-        std::pow(1.0 + marketData.ftseForwardReturn, 1.0 / years) - 1.0;
+        std::pow(1.0 + totalReturn, 1.0 / years) - 1.0;
+
     double annualisedRiskFreeRate =
-        std::pow(1.0 + marketData.backtestRiskFreeReturn, 1.0 / years) - 1.0;
+        std::pow(
+            1.0 + marketData.backtestRiskFreeReturn,
+            1.0 / years
+        ) - 1.0;
 
     return (annualisedReturn - annualisedRiskFreeRate) / volatility;
 }

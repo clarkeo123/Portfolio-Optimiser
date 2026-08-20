@@ -273,8 +273,17 @@ void loadPriceSeries(
     }
 
     std::string line;
-    std::getline(file, line);
+    if (!std::getline(file, line)) {
+        throw std::runtime_error("Could not read price header from " + filename);
+    }
+
     std::vector<std::string> headers = splitCSVLine(line);
+
+    if (headers.size() < 2 || headers[0] != "Date") {
+        throw std::runtime_error(
+            "Invalid price CSV header in " + filename
+        );
+    }
 
     std::map<std::string, std::size_t> columnByTicker;
     for (std::size_t col = 1; col < headers.size(); ++col) {
@@ -305,17 +314,48 @@ void loadPriceSeries(
     std::vector<double> ftseRows;
 
     while (std::getline(file, line)) {
-        if (line.empty()) { continue; }
+        if (line.empty()) {
+            continue;
+        }
+
         std::vector<std::string> values = splitCSVLine(line);
+
+        // Check before accessing any CSV column.
+        if (values.size() < headers.size()) {
+            throw std::runtime_error(
+                "Malformed price row in " + filename +
+                ": insufficient columns."
+            );
+        }
 
         dates.push_back(values[0]);
 
         std::vector<double> row(n);
+
         for (std::size_t i = 0; i < n; ++i) {
-            row[i] = stringToDouble(values[assetColumns[i]]);
+            double price = stringToDouble(values[assetColumns[i]]);
+
+            if (!std::isfinite(price) || price <= 0.0) {
+                throw std::runtime_error(
+                    "Invalid non-positive or non-finite asset price in " +
+                    filename + "."
+                );
+            }
+
+            row[i] = price;
         }
+
+        double ftsePrice = stringToDouble(values[ftseColumn]);
+
+        if (!std::isfinite(ftsePrice) || ftsePrice <= 0.0) {
+            throw std::runtime_error(
+                "Invalid non-positive or non-finite FTSE price in " +
+                filename + "."
+            );
+        }
+
         rows.push_back(row);
-        ftseRows.push_back(stringToDouble(values[ftseColumn]));
+        ftseRows.push_back(ftsePrice);
     }
 
     const std::size_t numberOfDates = rows.size();
@@ -327,7 +367,9 @@ void loadPriceSeries(
     ftsePrices = Eigen::VectorXd(numberOfDates);
 
     for (std::size_t t = 0; t < numberOfDates; ++t) {
-        for (std::size_t i = 0; i < n; ++i) { prices(t, i) = rows[t][i]; }
+        for (std::size_t i = 0; i < n; ++i) {
+            prices(t, i) = rows[t][i];
+        }
         ftsePrices(t) = ftseRows[t];
     }
 }

@@ -36,6 +36,12 @@ GeneticAlgorithm::GeneticAlgorithm(
         throw std::runtime_error("Tournament size must be positive.");
     }
 
+    if (settings.tournamentSize > settings.populationSize) {
+        throw std::runtime_error(
+            "Tournament size cannot exceed population size."
+        );
+    }
+
     if (settings.eliteFraction < 0.0 || settings.eliteFraction > 1.0) {
         throw std::invalid_argument("Elite fraction must be between 0 and 1.");
     }
@@ -237,7 +243,11 @@ void GeneticAlgorithm::calculateObjectiveRanges() {
 
         portfolio.volatility = calculateVolatility(portfolio, marketData);
 
-        portfolio.sharpeRatio = calculateSharpeRatio(portfolio, marketData);
+        portfolio.sharpeRatio = calculateSharpeRatioFromMetrics(
+            portfolio.expectedReturn,
+            portfolio.volatility,
+            marketData.riskFreeRate
+        );
 
         objectiveRanges.minimumReturn =
             std::min(objectiveRanges.minimumReturn, portfolio.expectedReturn);
@@ -365,7 +375,11 @@ double GeneticAlgorithm::evaluateFitness(Portfolio& portfolio)
 
     portfolio.volatility = calculateVolatility(portfolio, marketData);
 
-    portfolio.sharpeRatio = calculateSharpeRatio(portfolio, marketData);
+    portfolio.sharpeRatio = calculateSharpeRatioFromMetrics(
+        portfolio.expectedReturn,
+        portfolio.volatility,
+        marketData.riskFreeRate
+    );
 
     const double normalisedReturn =
         calculateNormalisedReturn(portfolio.expectedReturn);
@@ -391,7 +405,7 @@ double GeneticAlgorithm::evaluateFitness(Portfolio& portfolio)
 
 // tournament selection
 
-Portfolio GeneticAlgorithm::tournamentSelection(
+const Portfolio& GeneticAlgorithm::tournamentSelection(
     const std::vector<Portfolio>& population
 ) {
     int bestIndex = randomInt(0, static_cast<int>(population.size()) - 1);
@@ -505,7 +519,7 @@ Portfolio GeneticAlgorithm::run(){
 
         evaluateFitness(portfolio);
 
-        population.push_back(portfolio);
+        population.push_back(std::move(portfolio));
     }
 
     Portfolio bestPortfolio = population[0];
@@ -527,6 +541,8 @@ Portfolio GeneticAlgorithm::run(){
         "GenerationsWithoutImprovement"
     );
 
+    double populationDiversity = 0.0;
+
     // evolution
 
     for (int generation = 0; generation < settings.generations; ++generation) {
@@ -543,8 +559,9 @@ Portfolio GeneticAlgorithm::run(){
 
         // sorts population from best to worst
 
-        std::sort(
+        std::partial_sort(
             population.begin(),
+            population.begin() + eliteCount,
             population.end(),
             [](const Portfolio& a, const Portfolio& b)
             {
@@ -556,7 +573,10 @@ Portfolio GeneticAlgorithm::run(){
 
         double generationBestFitness = generationBest.fitness;
 
-        double populationDiversity = calculatePopulationDiversity(population);
+        if (generation % 10 == 0 ||
+            generation == settings.generations - 1) {
+            populationDiversity = calculatePopulationDiversity(population);
+        }
 
         if (generationBestFitness > bestFitness)
         {
@@ -603,9 +623,9 @@ Portfolio GeneticAlgorithm::run(){
         while (
             static_cast<int>(newPopulation.size()) < settings.populationSize
         ) {
-            Portfolio parent1 = tournamentSelection(population);
+            const Portfolio& parent1 = tournamentSelection(population);
 
-            Portfolio parent2 = tournamentSelection(population);
+            const Portfolio& parent2 = tournamentSelection(population);
 
             Portfolio child = crossover(parent1, parent2);
 
@@ -613,7 +633,7 @@ Portfolio GeneticAlgorithm::run(){
 
             evaluateFitness(child);
 
-            newPopulation.push_back(child);
+            newPopulation.push_back(std::move(child));
         }
 
         population = std::move(newPopulation);

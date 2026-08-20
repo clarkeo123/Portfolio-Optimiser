@@ -105,7 +105,7 @@ private:
         const std::vector<std::string>& history
     ) const;
 
-    Portfolio tournamentSelection(
+    const Portfolio& tournamentSelection(
         const std::vector<Portfolio>& population
     );
 

@@ -36,9 +36,10 @@ double calculateVolatility(
 );
 
 // calculates Sharpe ratio
-double calculateSharpeRatio(
-    const Portfolio& portfolio,
-    const MarketData& marketData
+double calculateSharpeRatioFromMetrics(
+    double expectedReturn,
+    double volatility,
+    double riskFreeRate
 );
 
 // builds the market-cap-weighted benchmark portfolio (the "index" portfolio)

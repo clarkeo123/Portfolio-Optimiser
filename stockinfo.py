@@ -1,14 +1,8 @@
-from datetime import date
-from sklearn.covariance import LedoitWolf
-
 import yfinance as yf
 import pandas as pd
-import math
 import numpy as np
 import io
-import zipfile
 import requests
-import openpyxl
 
 WIKI_URL = "https://en.wikipedia.org/wiki/FTSE_100_Index"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"}
@@ -170,6 +164,15 @@ def calculate_backtest_risk_free_return(backtest_start, backtest_end):
 
 def annualise_return(total_return, start_date, end_date):
     years = (pd.Timestamp(end_date) - pd.Timestamp(start_date)).days / 365.0
+
+    if years <= 0:
+        raise ValueError(
+            "End date must be after start date when annualising a return."
+        )
+
+    if not np.isfinite(total_return) or total_return <= -1.0:
+        raise ValueError("Total return must be finite and greater than -100%.")
+
     return (1.0 + total_return) ** (1.0 / years) - 1.0
 
 FTSE100_INDEX = "^FTSE"
@@ -180,22 +183,23 @@ def get_market_data(tickers: list[str], years: int = 5, end_date=None):
     #   stock_prices
     #   stock_log_returns
     #   market_log_returns
+    #   market_prices
     #   start_date
     #   end_date
 
-    if end_date is None: end_date = pd.Timestamp.today().normalize()
+    if end_date is None:
+        end_date = pd.Timestamp.today().normalize()
 
     start_date = end_date - pd.DateOffset(years=years)
 
-    download_tickers = list(tickers) + [
-        FTSE100_INDEX,
-        FTSE100_FALLBACK,
-    ]
+    start = start_date.strftime("%Y-%m-%d")
+    end = (end_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
+    # Download stocks separately from the market benchmark.
     data = yf.download(
-        download_tickers,
-        start=start_date.strftime("%Y-%m-%d"),
-        end=(end_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+        list(tickers),
+        start=start,
+        end=end,
         interval="1d",
         group_by="ticker",
         auto_adjust=True,
@@ -222,43 +226,81 @@ def get_market_data(tickers: list[str], years: int = 5, end_date=None):
 
     stock_prices = pd.DataFrame(prices).sort_index()
 
-    # FTSE 100 market prices
+    if stock_prices.empty:
+        raise ValueError("Could not download any stock price data.")
+
+    # Download FTSE separately so a failed ^FTSE request does not
+    # prevent the fallback benchmark from being used.
     market_prices = pd.Series(dtype=float)
 
-    try:
-        market_prices = data[FTSE100_INDEX]["Close"].dropna()
-    except KeyError:
-        pass
-
-    if len(market_prices) < 2:
-        print(
-            f"Warning: {FTSE100_INDEX} unavailable; "
-            f"using {FTSE100_FALLBACK} as FTSE 100 proxy."
-        )
-
+    for benchmark in [FTSE100_INDEX, FTSE100_FALLBACK]:
         try:
-            market_prices = data[FTSE100_FALLBACK]["Close"].dropna()
-        except KeyError:
-            market_prices = pd.Series(dtype=float)
+            benchmark_data = yf.download(
+                benchmark,
+                start=start,
+                end=end,
+                interval="1d",
+                auto_adjust=True,
+                threads=False,
+                progress=False,
+            )
+
+            if benchmark_data.empty:
+                print(f"Warning: no data returned for {benchmark}")
+                continue
+
+            close = benchmark_data["Close"]
+
+            # yf.download() can return a one-column DataFrame
+            # even when only one ticker was requested.
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
+
+            close = close.dropna()
+
+            if len(close) >= 2:
+                market_prices = close
+                print(f"Using market benchmark: {benchmark}")
+                break
+
+            print(f"Warning: insufficient data for {benchmark}")
+
+        except Exception as exc:
+            print(f"Warning: failed to download {benchmark}: {exc}")
 
     if len(market_prices) < 2:
         raise ValueError(
-            "Could not download either ^FTSE or ISF.L market data."
+            f"Could not download either {FTSE100_INDEX} "
+            f"or {FTSE100_FALLBACK} market data."
         )
-    
-    # calculates log returns
-    stock_log_returns = np.log(stock_prices / stock_prices.shift(1))
 
+    # calculate log returns
+    stock_log_returns = np.log(stock_prices / stock_prices.shift(1))
     market_log_returns = np.log(market_prices / market_prices.shift(1))
 
-    # aligns everything by date, but doesn't remove dates
-    # just because one stock is missing
+    # makes sure the benchmark is a Series
+    if isinstance(market_log_returns, pd.DataFrame):
+        market_log_returns = market_log_returns.iloc[:, 0]
+
+    market_log_returns = market_log_returns.rename(FTSE100_INDEX)
+
+    # aligns stocks and benchmark by date
     combined_returns = pd.concat(
-        [stock_log_returns, market_log_returns.rename(FTSE100_INDEX)],
-        axis=1
+        [
+            stock_log_returns,
+            market_log_returns,
+        ],
+        axis=1,
     )
 
-    stock_log_returns = combined_returns.drop(columns=FTSE100_INDEX)
+    # removes rows where the benchmark is unavailable
+    combined_returns = combined_returns.dropna(
+        subset=[FTSE100_INDEX]
+    )
+
+    stock_log_returns = combined_returns.drop(
+        columns=FTSE100_INDEX
+    )
 
     market_log_returns = combined_returns[FTSE100_INDEX]
 
@@ -268,7 +310,7 @@ def get_market_data(tickers: list[str], years: int = 5, end_date=None):
         market_log_returns,
         market_prices,
         start_date,
-        end_date
+        end_date,
     )
 
 def calculate_market_return(market_log_returns, trading_days=252):
@@ -372,6 +414,12 @@ def calculate_market_cap_weights(market_caps: pd.Series) -> pd.Series:
     if total <= 0:
         raise ValueError("Total market capitalisation is zero or negative")
 
+    if market_caps.empty:
+        raise ValueError("No market capitalisation data is available.")
+
+    if not np.isfinite(market_caps).all():
+        raise ValueError("Market capitalisation data contains non-finite values.")
+
     weights = market_caps / total
     weights.name = "MarketCapWeight"
 
@@ -382,6 +430,17 @@ def calculate_covariance_matrix(
     trading_days: int = 252,
     shrinkage: float = 0.7
 ) -> pd.DataFrame:
+    if log_returns.shape[1] < 2:
+        raise ValueError(
+            "At least two stocks are required to calculate the covariance matrix."
+        )
+
+    if trading_days <= 0:
+        raise ValueError("Trading days per year must be positive.")
+
+    if not 0.0 <= shrinkage <= 1.0:
+        raise ValueError("Shrinkage must be between 0 and 1.")
+    
     daily_covariance = log_returns.cov()
 
     # converts covariance to correlation
@@ -750,7 +809,7 @@ if __name__ == "__main__":
     ftse_df = ftse_df[ftse_df["yfinance_ticker"].isin(common_tickers)]
 
     # market capitalisations, for the market-cap-weighted benchmark portfolio
-    market_caps = get_market_caps(common_tickers, args.end_date)
+    market_caps = get_market_caps(common_tickers, END_DATE)
 
     # keep only stocks we could get a market cap for, preserving the
     # existing order explicitly rather than relying on Index.intersection
@@ -870,36 +929,37 @@ if __name__ == "__main__":
     print()
     print("Portfolio optimisation data generated")
 
-    assets = pd.read_csv("portfolio_data/assets.csv")
-    backtest = pd.read_csv("portfolio_data/backtest.csv")
+    if backtest_available:
+        assets = pd.read_csv("portfolio_data/assets.csv")
+        backtest = pd.read_csv("portfolio_data/backtest.csv")
 
-    comparison = assets[["YFinanceTicker", "ExpectedReturn"]].merge(
-        backtest[["YFinanceTicker", "ForwardReturn"]],
-        on="YFinanceTicker",
-        how="inner"
-    )
+        comparison = assets[["YFinanceTicker", "ExpectedReturn"]].merge(
+            backtest[["YFinanceTicker", "ForwardReturn"]],
+            on="YFinanceTicker",
+            how="inner"
+        )
 
-    correlation = comparison["ExpectedReturn"].corr(
-        comparison["ForwardReturn"]
-    )
+        correlation = comparison["ExpectedReturn"].corr(
+            comparison["ForwardReturn"]
+        )
 
-    print(f"\nExpectedReturn -> ForwardReturn correlation: {correlation:.4f}")
+        print(f"\nExpectedReturn -> ForwardReturn correlation: {correlation:.4f}")
 
-    beta_comparison = assets[["YFinanceTicker", "Beta"]].merge(
-        backtest[["YFinanceTicker", "ForwardReturn"]],
-        on="YFinanceTicker",
-        how="inner"
-    )
+        beta_comparison = assets[["YFinanceTicker", "Beta"]].merge(
+            backtest[["YFinanceTicker", "ForwardReturn"]],
+            on="YFinanceTicker",
+            how="inner"
+        )
 
-    beta_correlation = beta_comparison["Beta"].corr(
-        beta_comparison["ForwardReturn"]
-    )
+        beta_correlation = beta_comparison["Beta"].corr(
+            beta_comparison["ForwardReturn"]
+        )
 
-    print(f"Beta -> ForwardReturn correlation: {beta_correlation:.4f}")
+        print(f"Beta -> ForwardReturn correlation: {beta_correlation:.4f}")
 
-    rank_correlation = comparison["ExpectedReturn"].corr(
-        comparison["ForwardReturn"],
-        method="spearman"
-    )
+        rank_correlation = comparison["ExpectedReturn"].corr(
+            comparison["ForwardReturn"],
+            method="spearman"
+        )
 
-    print(f"ExpectedReturn rank -> ForwardReturn rank correlation: {rank_correlation:.4f}")
+        print(f"ExpectedReturn rank -> ForwardReturn rank correlation: {rank_correlation:.4f}")

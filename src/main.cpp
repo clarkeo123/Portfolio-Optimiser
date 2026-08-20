@@ -278,12 +278,41 @@ int main() {
         // backtest: how did this portfolio actually perform from the
         // training end date up to today?
 
+        double optimisedForwardReturn = 0.0;
+        double marketCapForwardReturn = 0.0;
+
+        double optimisedBacktestVolatility = 0.0;
+        double marketCapBacktestVolatility = 0.0;
+        double ftseBacktestVolatility = 0.0;
+
+        double optimisedBacktestSharpe = 0.0;
+        double marketCapBacktestSharpe = 0.0;
+        double ftseBacktestSharpe = 0.0;
+
         if (marketData.backtestAvailable) {
-            double optimisedForwardReturn =
+            optimisedForwardReturn =
                 calculatePortfolioForwardReturn(bestPortfolio, marketData);
 
-            double marketCapForwardReturn =
+            marketCapForwardReturn =
                 calculatePortfolioForwardReturn(marketPortfolio, marketData);
+                            
+            optimisedBacktestVolatility =
+                calculateBacktestVolatility(bestPortfolio, marketData);
+
+            marketCapBacktestVolatility =
+                calculateBacktestVolatility(marketPortfolio, marketData);
+
+            ftseBacktestVolatility =
+                calculateFTSEBacktestVolatility(marketData);
+
+            optimisedBacktestSharpe =
+                calculateBacktestSharpeRatio(bestPortfolio, marketData);
+
+            marketCapBacktestSharpe =
+                calculateBacktestSharpeRatio(marketPortfolio, marketData);
+
+            ftseBacktestSharpe =
+                calculateFTSEBacktestSharpeRatio(marketData);
 
             std::cout
                 << "\nBacktest: "
@@ -308,16 +337,16 @@ int main() {
 
             std::cout
                 << std::setw(15) << "Volatility"
-                << std::setw(12) << calculateBacktestVolatility(bestPortfolio, marketData) * 100.0 << "%"
-                << std::setw(12) << calculateBacktestVolatility(marketPortfolio, marketData) * 100.0 << "%"
-                << std::setw(12) << calculateFTSEBacktestVolatility(marketData) * 100.0 << "%"
+                << std::setw(12) << optimisedBacktestVolatility * 100.0 << "%"
+                << std::setw(12) << marketCapBacktestVolatility * 100.0 << "%"
+                << std::setw(12) << ftseBacktestVolatility * 100.0 << "%"
                 << "\n";
 
             std::cout
                 << std::setw(15) << "Sharpe ratio"
-                << std::setw(13) << calculateBacktestSharpeRatio(bestPortfolio, marketData)
-                << std::setw(13) << calculateBacktestSharpeRatio(marketPortfolio, marketData)
-                << std::setw(13) << calculateFTSEBacktestSharpeRatio(marketData)
+                << std::setw(13) << optimisedBacktestSharpe
+                << std::setw(13) << marketCapBacktestSharpe
+                << std::setw(13) << ftseBacktestSharpe
                 << "\n";
 
             std::vector<double> trainOptimised = calculateTrainingValueSeries(bestPortfolio, marketData);
@@ -346,8 +375,6 @@ int main() {
                     << backtestFtse[t] << "\n";
             }
 
-            backtestOut.close();
-
             std::cout << "\nWrote portfolio_data/backtest_timeseries.csv\n";
 
             std::ofstream out("portfolio_data/performance_timeseries.csv");
@@ -371,8 +398,6 @@ int main() {
                     << marketCapScale * backtestMarketCap[t] << "," 
                     << ftseScale * backtestFtse[t] << "\n";
             }
-
-            out.close();
 
             std::cout << "Wrote portfolio_data/performance_timeseries.csv\n";
 
@@ -410,9 +435,9 @@ int main() {
 
         if (marketData.backtestAvailable) {
             sweepOut
-                << calculatePortfolioForwardReturn(bestPortfolio, marketData) << ','
-                << calculateBacktestVolatility(bestPortfolio, marketData) << ','
-                << calculateBacktestSharpeRatio(bestPortfolio, marketData);
+                << optimisedForwardReturn << ','
+                << optimisedBacktestVolatility << ','
+                << optimisedBacktestSharpe;
         } else {
             sweepOut << ",,";
         }
