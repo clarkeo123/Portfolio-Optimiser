@@ -67,9 +67,9 @@ The training period is used to estimate portfolio characteristics. The later per
 
 For each stock, the program estimates beta relative to the market:
 
-$$
-\beta_i = \frac{\operatorname{Cov}(R_i, R_m)}{\operatorname{Var}(R_m)}
-$$
+```math
+\beta_i = \frac{\mathrm{Cov}(R_i, R_m)}{\mathrm{Var}(R_m)}
+```
 
 The expected annual return is then calculated using CAPM:
 
@@ -98,9 +98,9 @@ $$
 
 The Sharpe ratio is calculated from expected return, volatility and the risk-free rate:
 
-$$
-\operatorname{Sharpe}_p = \frac{E[R_p] - R_f}{\sigma_p}
-$$
+```math
+\mathrm{Sharpe}_p = \frac{E[R_p] - R_f}{\sigma_p}
+```
 
 The genetic algorithm combines these metrics into a configurable fitness score. Return and Sharpe are maximised, while volatility is penalised. Objective components are normalised before being combined so that one metric doesn't dominate just because of its numerical scale.
 

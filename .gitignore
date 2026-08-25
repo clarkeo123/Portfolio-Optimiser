@@ -222,3 +222,6 @@ __marimo__/
 
 # CSV Files
 portfolio_data/
+
+# Mac Files
+.DS_Store
