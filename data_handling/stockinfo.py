@@ -3,6 +3,10 @@ import pandas as pd
 import numpy as np
 import io
 import requests
+import logging
+
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("yfinance").propagate = False
 
 WIKI_URL = "https://en.wikipedia.org/wiki/FTSE_100_Index"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"}
@@ -533,6 +537,62 @@ def get_backtest_data(tickers, backtest_start, backtest_end):
         backtest_prices
     )
 
+def get_period_returns(
+    tickers,
+    period_start: pd.Timestamp,
+    period_end: pd.Timestamp,
+):
+    download_tickers = list(tickers) + [FTSE100_INDEX]
+
+    data = yf.download(
+        download_tickers,
+        start=period_start.strftime("%Y-%m-%d"),
+        end=(period_end + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+        interval="1d",
+        group_by="ticker",
+        auto_adjust=True,
+        threads=True,
+        progress=False,
+    )
+
+    stock_returns = {}
+    closes = {}
+
+    for ticker in tickers:
+        try:
+            close = data[ticker]["Close"].dropna()
+        except KeyError:
+            print(f"Warning: no period data found for {ticker}")
+            continue
+
+        if len(close) < 2:
+            print(f"Warning: insufficient period data for {ticker}")
+            continue
+
+        stock_returns[ticker] = close.iloc[-1] / close.iloc[0] - 1
+        closes[ticker] = close
+
+    try:
+        ftse_close = data[FTSE100_INDEX]["Close"].dropna()
+    except KeyError:
+        raise ValueError(
+            f"Could not download FTSE data for "
+            f"{period_start.date()} to {period_end.date()}."
+        )
+
+    if len(ftse_close) < 2:
+        raise ValueError(
+            f"Insufficient FTSE data for "
+            f"{period_start.date()} to {period_end.date()}."
+        )
+
+    ftse_return = ftse_close.iloc[-1] / ftse_close.iloc[0] - 1
+
+    return (
+        pd.Series(stock_returns, name="ForwardReturn"),
+        ftse_return,
+        pd.DataFrame(closes).dropna(),
+    )
 
 def save_backtest(forward_returns: pd.Series, output_path: str):
     backtest_df = forward_returns.rename("ForwardReturn").reset_index()
@@ -669,6 +729,240 @@ def filter_stocks_by_data_quality(
 
     return stock_log_returns[valid_tickers]
 
+def generate_rebalance_dates(
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    months: int = 4,
+):
+    if months <= 0:
+        raise ValueError("Rebalance interval must be positive.")
+
+    dates = []
+    current = pd.Timestamp(start_date).normalize()
+    final_date = pd.Timestamp(end_date).normalize()
+
+    while current < final_date:
+        dates.append(current)
+        current = current + pd.DateOffset(months=months)
+
+    return dates
+
+def build_portfolio_inputs(
+    tickers_df,
+    training_end_date,
+    years,
+    trading_days=252,
+):
+    prices, stock_log_returns, market_log_returns, market_prices, \
+        start_date, end_date = get_market_data(
+            tickers_df["yfinance_ticker"].tolist(),
+            years=years,
+            end_date=training_end_date,
+        )
+
+    risk_free_cash_return = calculate_backtest_risk_free_return(
+        start_date,
+        end_date,
+    )
+
+    risk_free_rate = annualise_return(
+        risk_free_cash_return,
+        start_date,
+        end_date,
+    )
+
+    stock_log_returns = filter_stocks_by_data_quality(
+        stock_log_returns,
+        minimum_data_fraction=0.95,
+    )
+
+    market_return = calculate_market_return(
+        market_log_returns,
+        trading_days=trading_days,
+    )
+
+    betas = calculate_betas(
+        stock_log_returns,
+        market_log_returns,
+    )
+
+    expected_returns = calculate_capm_returns(
+        betas,
+        risk_free_rate,
+        market_return,
+    )
+
+    covariance = calculate_covariance_matrix(
+        stock_log_returns,
+        trading_days=trading_days,
+    )
+
+    common_tickers = (
+        stock_log_returns.columns
+        .intersection(expected_returns.index)
+        .intersection(covariance.index)
+    )
+
+    if len(common_tickers) == 0:
+        raise ValueError(
+            f"No common tickers available at {training_end_date.date()}."
+        )
+
+    market_caps = get_market_caps(
+        common_tickers,
+        training_end_date,
+    )
+
+    common_tickers = [
+        ticker
+        for ticker in common_tickers
+        if ticker in market_caps.index
+    ]
+
+    if not common_tickers:
+        raise ValueError(
+            f"No stocks with valid market caps at "
+            f"{training_end_date.date()}."
+        )
+
+    covariance = covariance.loc[common_tickers, common_tickers]
+    expected_returns = expected_returns[common_tickers]
+    betas = betas[common_tickers]
+    stock_log_returns = stock_log_returns[common_tickers]
+
+    market_cap_weights = calculate_market_cap_weights(
+        market_caps.loc[common_tickers]
+    )
+
+    return {
+        "tickers": common_tickers,
+        "prices": prices,
+        "stock_log_returns": stock_log_returns,
+        "market_prices": market_prices,
+        "expected_returns": expected_returns,
+        "covariance": covariance,
+        "betas": betas,
+        "market_caps": market_caps.loc[common_tickers],
+        "market_cap_weights": market_cap_weights,
+        "risk_free_rate": risk_free_rate,
+        "market_return": market_return,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+
+def run_walk_forward_backtest(
+    ftse_df,
+    training_end_date,
+    backtest_end_date,
+    years,
+    rebalance_months=4,
+    trading_days=252,
+):
+    rebalance_dates = generate_rebalance_dates(
+        training_end_date,
+        backtest_end_date,
+        months=rebalance_months,
+    )
+
+    portfolio_results = []
+    benchmark_results = []
+    period_results = []
+
+    for index, rebalance_date in enumerate(rebalance_dates):
+        if index + 1 < len(rebalance_dates):
+            period_end = rebalance_dates[index + 1]
+        else:
+            period_end = backtest_end_date
+
+        print(
+            f"\nRebalance {rebalance_date.date()} "
+            f"-> {period_end.date()}"
+        )
+
+        inputs = build_portfolio_inputs(
+            ftse_df,
+            training_end_date=rebalance_date,
+            years=years,
+            trading_days=trading_days,
+        )
+
+        tickers = inputs["tickers"]
+
+        forward_returns, ftse_return, backtest_prices = (
+            get_period_returns(
+                tickers,
+                rebalance_date,
+                period_end,
+            )
+        )
+
+        valid_tickers = [
+            ticker
+            for ticker in tickers
+            if ticker in forward_returns.index
+        ]
+
+        if not valid_tickers:
+            print("Skipping period: no valid stock returns.")
+            continue
+
+        forward_returns = forward_returns[valid_tickers]
+
+        portfolio_expected_returns = inputs["expected_returns"][
+            valid_tickers
+        ]
+
+        portfolio_covariance = inputs["covariance"].loc[
+            valid_tickers,
+            valid_tickers,
+        ]
+
+        benchmark_weights = inputs["market_cap_weights"][
+            valid_tickers
+        ]
+
+        # Replace this with your actual C++ optimiser call or equivalent
+        portfolio_weights = optimise_weights(
+            expected_returns=portfolio_expected_returns,
+            covariance=portfolio_covariance,
+        )
+
+        portfolio_return = float(
+            (portfolio_weights * forward_returns).sum()
+        )
+
+        benchmark_return = float(
+            (benchmark_weights * forward_returns).sum()
+        )
+
+        portfolio_results.append(portfolio_return)
+        benchmark_results.append(benchmark_return)
+
+        period_results.append({
+            "RebalanceDate": rebalance_date.date(),
+            "PeriodEnd": period_end.date(),
+            "PortfolioReturn": portfolio_return,
+            "BenchmarkReturn": benchmark_return,
+            "FTSEReturn": ftse_return,
+            "NumberOfStocks": len(valid_tickers),
+        })
+
+    results = pd.DataFrame(period_results)
+
+    results["PortfolioGrowth"] = (
+        1 + results["PortfolioReturn"]
+    ).cumprod()
+
+    results["BenchmarkGrowth"] = (
+        1 + results["BenchmarkReturn"]
+    ).cumprod()
+
+    results["FTSEGrowth"] = (
+        1 + results["FTSEReturn"]
+    ).cumprod()
+
+    return pd.DataFrame(period_results)
+
 if __name__ == "__main__":
     import argparse
     import os
@@ -676,36 +970,55 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Generate portfolio optimisation input data."
     )
+
     parser.add_argument(
         "--end-date",
         type=str,
         default=None,
         help=(
-            "Training data cutoff date (YYYY-MM-DD). Stock data used to "
-            "build the portfolio is drawn from before this date. Defaults "
-            "to today, in which case no backtest period is available."
+            "Training data cutoff date (YYYY-MM-DD). "
+            "Defaults to today."
         ),
     )
+
     parser.add_argument(
         "--years",
         type=int,
         default=5,
         help="Length of the historical training window, in years.",
     )
+
     parser.add_argument(
         "--backtest-end-date",
         type=str,
         default=None,
+        help="Backtest end date (YYYY-MM-DD). Defaults to today.",
+    )
+
+    parser.add_argument(
+        "--walk-forward",
+        action="store_true",
         help=(
-            "Backtest end date (YYYY-MM-DD). Defaults to today."
+            "Run a walk-forward backtest with periodic portfolio "
+            "rebalancing."
         ),
     )
+
+    parser.add_argument(
+        "--rebalance-months",
+        type=int,
+        default=4,
+        help="Number of months between portfolio rebalances.",
+    )
+
     args = parser.parse_args()
 
     TODAY = pd.Timestamp.today().normalize()
 
     END_DATE = (
-        pd.Timestamp(args.end_date).normalize() if args.end_date else TODAY
+        pd.Timestamp(args.end_date).normalize()
+        if args.end_date
+        else TODAY
     )
 
     BACKTEST_END_DATE = (
@@ -714,16 +1027,101 @@ if __name__ == "__main__":
         else TODAY
     )
 
-    if BACKTEST_END_DATE <= END_DATE:
-        raise ValueError(
-            "Backtest end date must be after the training end date."
-        )
-
     YEARS = args.years
     TRADING_DAYS = 252
     OUTPUT_DIR = "portfolio_data"
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    if YEARS <= 0:
+        raise ValueError("--years must be positive.")
+
+    if args.rebalance_months <= 0:
+        raise ValueError("--rebalance-months must be positive.")
+
+    if args.walk_forward and BACKTEST_END_DATE <= END_DATE:
+        raise ValueError(
+            "For walk-forward mode, --backtest-end-date must be "
+            "after --end-date."
+        )
+
+    # walk-forward mode
+
+    if args.walk_forward:
+        print(
+            f"Running walk-forward backtest from "
+            f"{END_DATE.date()} to {BACKTEST_END_DATE.date()} "
+            f"with rebalancing every {args.rebalance_months} months."
+        )
+
+        # obtains the initial FTSE constituent universe
+        ftse_df = get_ftse100_tickers()
+
+        print(
+            f"Found {len(ftse_df)} FTSE 100 constituents "
+            "for the initial universe."
+        )
+
+        walk_forward_results = run_walk_forward_backtest(
+            ftse_df=ftse_df,
+            training_end_date=END_DATE,
+            backtest_end_date=BACKTEST_END_DATE,
+            years=YEARS,
+            rebalance_months=args.rebalance_months,
+            trading_days=TRADING_DAYS,
+        )
+
+        results_path = (
+            f"{OUTPUT_DIR}/walk_forward_results.csv"
+        )
+
+        walk_forward_results.to_csv(
+            results_path,
+            index=False,
+        )
+
+        print()
+        print("Walk-forward backtest completed.")
+        print(f"Results saved to: {results_path}")
+
+        if not walk_forward_results.empty:
+            final_portfolio_growth = (
+                walk_forward_results["PortfolioGrowth"].iloc[-1]
+            )
+
+            final_benchmark_growth = (
+                walk_forward_results["BenchmarkGrowth"].iloc[-1]
+            )
+
+            final_ftse_growth = (
+                walk_forward_results["FTSEGrowth"].iloc[-1]
+            )
+
+            print(
+                f"Portfolio cumulative growth: "
+                f"{final_portfolio_growth:.4f}"
+            )
+
+            print(
+                f"Benchmark cumulative growth: "
+                f"{final_benchmark_growth:.4f}"
+            )
+
+            print(
+                f"FTSE cumulative growth: "
+                f"{final_ftse_growth:.4f}"
+            )
+
+        raise SystemExit(0)
+
+    # existing single-period mode
+
+    if BACKTEST_END_DATE <= END_DATE:
+        print(
+            "\nNo backtest period available. Pass --end-date and "
+            "--backtest-end-date to define a backtest period."
+        )
+
     # FTSE 100 constituents
     ftse_df = get_ftse100_tickers()
 
@@ -739,6 +1137,7 @@ if __name__ == "__main__":
     training_cash_return = calculate_backtest_risk_free_return(
         start_date, end_date
     )
+
     risk_free_rate = annualise_return(
         training_cash_return, start_date, end_date
     )
@@ -817,6 +1216,11 @@ if __name__ == "__main__":
         ticker for ticker in common_tickers if ticker in market_caps.index
     ]
 
+    if not common_tickers:
+        raise ValueError(
+            "No stocks remain after market-cap filtering."
+        )
+
     stock_log_returns = stock_log_returns[common_tickers]
     betas = betas[common_tickers]
     expected_returns = expected_returns[common_tickers]
@@ -827,7 +1231,8 @@ if __name__ == "__main__":
         market_caps.loc[common_tickers]
     )
 
-    # backtest
+    # existing single-period backtest
+
     backtest_available = BACKTEST_END_DATE > END_DATE
 
     forward_returns = None
@@ -873,11 +1278,9 @@ if __name__ == "__main__":
             "FTSE 100 index return over backtest period: "
             f"{ftse_forward_return:.2%}"
         )
-    else:
-        print(
-            "\nNo backtest period available. Pass --end-date and, optionally, "
-            "--backtest-end-date to define a backtest period."
-        )
+
+    print()
+    print("Generating portfolio optimisation data...")
 
     # saves data for C++
     save_assets(
@@ -928,6 +1331,8 @@ if __name__ == "__main__":
 
     print()
     print("Portfolio optimisation data generated")
+
+    # optional single-period comparisons
 
     if backtest_available:
         assets = pd.read_csv("portfolio_data/assets.csv")

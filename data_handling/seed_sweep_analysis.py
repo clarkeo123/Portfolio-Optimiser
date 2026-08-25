@@ -1,6 +1,13 @@
 import pandas as pd
 import numpy as np
 
+import argparse
+import os
+
+parser = argparse.ArgumentParser(
+    description="Analyse seed sweep"
+)
+
 df = pd.read_csv("portfolio_data/seed_sweep_results.csv")
 backtest = pd.read_csv("portfolio_data/backtest.csv")
 assets = pd.read_csv("portfolio_data/assets.csv")
@@ -101,6 +108,14 @@ def calculate_portfolio_stats(
         "MaxDrawdown": max_drawdown
     }
 
+parser.add_argument(
+    "--quiet",
+    action="store_true",
+    help="Suppress detailed diagnostic output"
+)
+
+args = parser.parse_args()
+
 # averages portfolio weights across all seeds
 weight_columns = [
     column for column in df.columns
@@ -109,11 +124,12 @@ weight_columns = [
 
 ensemble_weights = df[weight_columns].mean()
 
-print("\nEnsemble portfolio weights")
-print("--------------------------")
+if not args.quiet:
+    print("\nEnsemble portfolio weights")
+    print("--------------------------")
 
-for column, weight in ensemble_weights.sort_values(ascending=False).items():
-    print(f"{column.replace('Weight_', ''):>6}: {weight:8.4%}")
+    for column, weight in ensemble_weights.sort_values(ascending=False).items():
+        print(f"{column.replace('Weight_', ''):>6}: {weight:8.4%}")
 
 ensemble_net_exposure = ensemble_weights.sum()
 ensemble_gross_exposure = ensemble_weights.abs().sum()
@@ -298,16 +314,17 @@ if (
 
     print(f"Correlation: {return_correlation:.4f}")
 
-print("\nExposure by seed")
-print("----------------")
+if not args.quiet:
+    print("\nExposure by seed")
+    print("----------------")
 
-for _, row in df.sort_values("GrossExposure").iterrows():
-    print(
-        f"Seed {int(row['Seed']):2d}: "
-        f"Backtest vol={row['BacktestVolatility']:.4f}  "
-        f"Gross={row['GrossExposure']:.4f}  "
-        f"Net={row['NetExposure']:.4f}"
-    )
+    for _, row in df.sort_values("GrossExposure").iterrows():
+        print(
+            f"Seed {int(row['Seed']):2d}: "
+            f"Backtest vol={row['BacktestVolatility']:.4f}  "
+            f"Gross={row['GrossExposure']:.4f}  "
+            f"Net={row['NetExposure']:.4f}"
+        )
 
 # checks whether gross exposure predicts backtest performance
 if (
