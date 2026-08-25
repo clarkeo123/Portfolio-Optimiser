@@ -15,7 +15,7 @@ The repository also includes a Python data pipeline, backtesting tools, seed-swe
 - Stock weight constraints, including optional short positions.
 - Cash allocation when the optimiser does not use the full net exposure.
 - Repeated runs with different random seeds to reduce sensitivity to a single stochastic solution.
-- Fixed-weight forward backtesting against a market-cap-weighted benchmark.
+- Fixed-weight out-of-sample backtesting against a market-cap-weighted benchmark.
 - Performance plots and statistical tests for comparing the optimised portfolio with benchmarks.
 
 ## Project structure
@@ -121,16 +121,16 @@ The genetic algorithm:
 
 Because the search is stochastic, different random seeds can produce different but valid solutions.
 
-### 5. Runs the forward backtest
+### 5. Runs the out-of-sample backtest
 
 After optimisation, the resulting portfolio is evaluated over an out-of-sample period using fixed weights. Periodic rebalancing is in the process of being implemented but is not currently functional.
 
 The backtest compares the optimised portfolio with:
 
-- A market-cap-weighted portfolio constructed from the selected assets.
-- The FTSE 100 index (when running a single seed).
+- A market-cap-weighted portfolio benchmark constructed from the selected assets.
+- The FTSE 100 index (when running a single seed). This was chosen due to the lack of a usable FTSE total return index on yfinance.
 
-Please note that the benchmark tends to outperform the FTSE 100 index as the price data it uses from yfinance assumes dividends are reinvested. As the FTSE 100 index does not do this it tends to underperform the benchmark by ~3-4% annually. The FTSE 100 index also contains stocks which may have been removed from the optimised portfolio due to a lack of price data. Because of this, the benchmark is the preferred portfolio to compare the optimised portfolio against as they are calculated using the same price data but with different individual stock weights.
+Please note that the benchmark tends to outperform the FTSE 100 index as the price data it uses from yfinance assumes dividends are reinvested. As the FTSE 100 index does not do this it tends to underperform the benchmark by ~3-4% annually. The FTSE 100 index also contains stocks which may have been removed from the optimised portfolio due to a lack of price data. Because of this, the benchmark is the preferred portfolio to compare the optimised portfolio against as they are both calculated using the same price data but with different individual stock weights.
 
 Reported metrics include annualised return, volatility, Sharpe ratio and maximum drawdown.
 
@@ -230,7 +230,7 @@ commands/run_portfolio.sh \
 | Option | Meaning |
 |---|---|
 | `--end-date` | End date of the training data, in `YYYY-MM-DD` format |
-| `--backtest-end-date` | End date of the forward backtest |
+| `--backtest-end-date` | End date of the out-of-sample backtest |
 | `--years` | Number of years of historical training data |
 | `--population` | Number of candidate portfolios per generation |
 | `--generations` | Number of evolutionary generations |
@@ -353,7 +353,7 @@ It reports:
 
 The bootstrap uses paired resampling of trading days, which preserves the relationship between the portfolio and benchmark observations.
 
-Statistical results should be interpreted cautiously. A favourable historical result can arise from estimation error, data mining, model assumptions or market-regime effects.
+Statistical results should be interpreted cautiously. A favourable historical result can arise from estimation error, model assumptions or market-regime effects.
 
 ## Reproducibility
 
